@@ -1689,7 +1689,8 @@ async function apiRequest(path,options={}){
   try{
     response=await fetch(requestPath,{...options,headers,credentials:openedFromFile?'include':'same-origin'});
   }catch(error){
-    throw new Error(openedFromFile?'当前页面是直接打开的文件，请访问 http://127.0.0.1:8000/ 后再登录':'无法连接后端服务，请确认 http://127.0.0.1:8000/ 正在运行');
+    if(openedFromFile)throw new Error('当前页面是直接打开的文件，请访问 http://127.0.0.1:8000/ 后再登录');
+    throw new Error(`无法连接后端服务，请确认 ${location.origin}/ 上的服务正在运行`);
   }
   const text=await response.text();
   let data=null;
