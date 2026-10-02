@@ -172,6 +172,7 @@ class Settings:
     llm_queue_size: int = max(0, int(os.getenv("LLM_QUEUE_SIZE", "60")))
     llm_queue_timeout_seconds: float = float(os.getenv("LLM_QUEUE_TIMEOUT_SECONDS", "240"))
     llm_token_output_estimate: int = max(0, int(os.getenv("LLM_TOKEN_OUTPUT_ESTIMATE", "512")))
+    llm_max_tokens: int = max(0, int(os.getenv("LLM_MAX_TOKENS", "0")))
     llm_providers: tuple[LLMProvider, ...] = _llm_providers()
     llm_reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "").strip()
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "")

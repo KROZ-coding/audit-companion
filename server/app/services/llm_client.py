@@ -385,6 +385,8 @@ class LLMClient:
         }
         if self.settings.llm_reasoning_effort:
             payload["reasoning_effort"] = self.settings.llm_reasoning_effort
+        if self.settings.llm_max_tokens > 0:
+            payload["max_tokens"] = self.settings.llm_max_tokens
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         return payload
