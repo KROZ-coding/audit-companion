@@ -74,6 +74,7 @@ cd server
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_smoke.py"   # 85 项后端测试
 .\.venv\Scripts\python.exe verify_llm_channels.py                             # 通道池逐端点真实验证
 .\.venv\Scripts\python.exe load_test.py --users 60 --scenario mixed           # 60 人混合压测
+.\.venv\Scripts\python.exe security_test.py --base http://127.0.0.1:8020    # 攻击面自查(仅对自有测试实例)
 ```
 
 `load_test.py` 自动起独立临时数据的 uvicorn 实例、预置 N 个学生账号，跑完自动清理；

@@ -250,11 +250,11 @@ async def run_user(client: httpx.AsyncClient, index: int, scenario: str, report:
     print(".", end="", flush=True)
 
 
-async def drive(port: int, users: int, scenario: str, report: Report) -> None:
+async def drive(base_url: str, users: int, scenario: str, report: Report) -> None:
     # 客户端必须在计时窗口外创建：每个 AsyncClient 的 SSL 上下文构建是同步 CPU 操作，
     # 60 个一起建会把事件循环卡住十几秒，污染所有延迟测量。
     clients = [
-        httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=httpx.Timeout(420.0, connect=10.0))
+        httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(420.0, connect=10.0))
         for _ in range(users)
     ]
     try:
@@ -271,7 +271,23 @@ def main() -> int:
     parser.add_argument("--no-knowledge", action="store_true", help="disable the local BM25 index (isolate the model path)")
     parser.add_argument("--json", help="write the raw report to this path")
     parser.add_argument("--keep", action="store_true", help="keep the temp data dir for inspection")
+    parser.add_argument("--attach", metavar="URL", help="attach to an already-running instance instead of spawning one (users must already exist there)")
     args = parser.parse_args()
+
+    if args.attach:
+        print(f"附着模式: {args.attach} · 场景: {args.scenario}(账号需已存在于目标实例)")
+        report = Report(users=args.users, scenario=args.scenario, with_knowledge=not args.no_knowledge)
+        begin = time.monotonic()
+        asyncio.run(drive(args.attach.rstrip("/"), args.users, args.scenario, report))
+        elapsed = time.monotonic() - begin
+        print(f"\n完成,整批用时 {elapsed:.1f}s")
+        print(report.summary())
+        if args.json:
+            payload = {"users": args.users, "scenario": args.scenario, "attach": args.attach, "elapsed_seconds": elapsed,
+                       "phases": {label: {"n": len(s.latencies), "ok": s.ok, "p50": percentile(s.latencies, 0.5), "p95": percentile(s.latencies, 0.95), "max": max(s.latencies) if s.latencies else 0.0, "failures": s.failures} for label, s in report.phases.items() if s.latencies}}
+            Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"报告已写入 {args.json}")
+        return 0 if all(not s.failures for s in report.phases.values()) else 1
 
     data_dir = Path(tempfile.mkdtemp(prefix="audit-loadtest-"))
     port = free_port()
@@ -284,7 +300,7 @@ def main() -> int:
         asyncio.run(wait_healthy(port))
         print(f"服务就绪，开始 {args.users} 人压测…")
         begin = time.monotonic()
-        asyncio.run(drive(port, args.users, args.scenario, report))
+        asyncio.run(drive(f"http://127.0.0.1:{port}", args.users, args.scenario, report))
         elapsed = time.monotonic() - begin
         print(f"\n完成，整批用时 {elapsed:.1f}s")
         print(report.summary())
