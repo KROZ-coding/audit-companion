@@ -205,12 +205,16 @@ async def generate(
             raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "课程不存在"})
         if not store.can_access_course(user, course_id):
             raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权使用该课程生成练习"})
-    source = _source_questions(store, user, course_id, limit=payload.count + 2)
-    if not source:
-        raise HTTPException(status_code=409, detail={
-            "code": "no_chat_history",
-            "message": "还没有答疑记录:先去「学习答疑」向 AI 提问,再回来生成练习",
-        })
+    source_mode = "single" if (payload.source_question or "").strip() else "history"
+    if source_mode == "single":
+        source = [payload.source_question.strip()[:400]]
+    else:
+        source = _source_questions(store, user, course_id, limit=payload.count + 2)
+        if not source:
+            raise HTTPException(status_code=409, detail={
+                "code": "no_chat_history",
+                "message": "还没有答疑记录:先去「学习答疑」向 AI 提问,再回来生成练习",
+            })
     if not store.reserve_chat_call(user.id):
         store.audit("chat_quota_exceeded", user.id, {"intent": "practice"})
         raise HTTPException(status_code=429, detail={
@@ -248,6 +252,7 @@ async def generate(
         store.practices[practice.id] = practice
     store.audit("practice_generate", user.id, {
         "practice_id": practice.id, "count": len(questions), "course_id": course_id,
+        "source_mode": source_mode,
     })
     return _detail(practice)
 

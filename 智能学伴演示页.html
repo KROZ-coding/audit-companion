@@ -1782,6 +1782,10 @@ async function ask(q){
     }else html+=`<div>${textHtml(data.answer_markdown||'暂无回答')}</div>`;
     if(data.mind_map?.length)html+=`<b>🧠 思维导图</b><ul class="maplist">${data.mind_map.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>`;
     if(data.sources?.length)html+=`<span class="src" style="display:block;margin-top:7px;font-size:11.5px;color:var(--teal)">📎 来源：${data.sources.map(x=>escapeHtml(x.name)).join('、')}</span>`;
+    if(CURRENT.role==='student'){
+      CHAT_PRACTICE_SOURCES.push(q);
+      html+=`<span style="display:block;margin-top:8px"><button class="btn sm primary" onclick="practiceFromChat(${CHAT_PRACTICE_SOURCES.length-1})">✨ 生成对应题目</button></span>`;
+    }
     const degradedNotice={no_knowledge:'未检索到相关课程资料，以下回答来自模型通用知识。',model_unconfigured:'模型接口尚未配置，请管理员检查服务端 URL、Key 和模型名。',model_unavailable:'模型服务暂不可用，本次未生成有效回答。',model_http_error:'模型服务返回错误，请检查接口地址、Key、模型名及中转站参数。',model_rate_limited:'模型中转站达到速率或并发上限，请稍后重试或联系管理员调整通道容量。',model_busy:'模型服务当前排队已满，本次没有消耗模型配额，请稍后重试。',model_cooling_down:'模型通道刚发生故障，正在短暂冷却，本次没有消耗模型配额。请稍后重试。',model_timeout:'模型服务请求超时，本次未生成回答。',model_transport_error:'模型服务连接中断，本次未生成回答。',model_invalid_response:'模型服务已响应，但返回格式无法识别；可根据服务端日志中的请求 ID 排查。',model_empty_response:'模型服务已响应，但没有返回可用文本内容。'}[data.degraded_reason];
     if(degradedNotice)html+=`<span style="display:block;margin-top:7px;font-size:11.5px;color:var(--amber)">${escapeHtml(degradedNotice)}</span>`;
     html+='</div>';chat.insertAdjacentHTML('beforeend',html);
@@ -1957,6 +1961,7 @@ async function submitQuiz(){
 }
 /* ===== P1b AI 练习 ===== */
 let PRACTICE=null;let PRACTICE_QUESTIONS=[];let practiceAns={};
+let CHAT_PRACTICE_SOURCES=[];
 async function renderPracticePage(){
   PRACTICE=null;PRACTICE_QUESTIONS=[];practiceAns={};
   document.getElementById('practiceArea').innerHTML='';
@@ -1985,12 +1990,12 @@ async function loadPracticeHistory(){
     area.innerHTML=`<div style="margin-top:14px"><div class="card-head-row"><h3>📚 练习历史</h3><button class="btn sm ghost" onclick="clearPracticeHistory()">🧹 清空全部</button></div>${rows}</div>`;
   }catch(error){area.innerHTML=`<p class="desc">历史加载失败:${escapeHtml(error.message||'')}</p>`;}
 }
-async function generatePractice(){
+async function generatePractice(sourceQuestion){
   const button=document.getElementById('practiceGenBtn');const msg=document.getElementById('practiceMsg');
   button.disabled=true;msg.style.display='block';msg.textContent='正在根据你的答疑记录出题,大约需要十几秒…';
   document.getElementById('practiceArea').innerHTML='';document.getElementById('practiceSubmitRow').style.display='none';
   try{
-    const data=await apiRequest('/api/practice/generate',{method:'POST',body:JSON.stringify({course_id:document.getElementById('practiceCourse')?.value||null,count:3})});
+    const data=await apiRequest('/api/practice/generate',{method:'POST',body:JSON.stringify({course_id:document.getElementById('practiceCourse')?.value||null,count:3,...(sourceQuestion?{source_question:sourceQuestion}:{})})});
     msg.textContent=`已生成 ${data.questions.length} 道题,作答后提交立即判分。`;
     renderPracticeSession(data);
     await loadPracticeHistory();
@@ -2052,6 +2057,13 @@ async function viewPractice(id){
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('practiceSubmitRow').style.display='none';
   try{renderPracticeSession(await apiRequest(`/api/practice/${encodeURIComponent(id)}`));}
   catch(error){showApiError(area,error.message||'加载失败');}
+}
+async function practiceFromChat(index){
+  const question=CHAT_PRACTICE_SOURCES[index];
+  if(!question)return;
+  const button=document.querySelector('#appNav button[data-p="p1b"]');
+  if(button)switchPanel(button);
+  await generatePractice(question);
 }
 async function deletePractice(id){
   try{await apiRequest(`/api/practice/${encodeURIComponent(id)}`,{method:'DELETE'});await loadPracticeHistory();}

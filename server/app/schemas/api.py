@@ -177,6 +177,7 @@ class QuizDraftRequest(BaseModel):
 class PracticeGenerateRequest(BaseModel):
     course_id: str | None = None
     count: int = Field(default=3, ge=1, le=8)
+    source_question: str | None = Field(default=None, max_length=4000)
 
 
 class PracticeQuestionOut(BaseModel):

@@ -2541,6 +2541,18 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/practice").json(), [])
         self.assertTrue(any(item["action"] == "practice_purge_on_logout" for item in self.app.state.store.audit_logs))
 
+    def test_practice_generate_from_single_source_question(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            response = self.client.post("/api/practice/generate", json={
+                "count": 2, "source_question": "什么是审计证据",
+            })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["source_questions"], ["什么是审计证据"])
+        self.assertEqual(body["status"], "ongoing")
+        self.assertEqual(len(body["questions"]), 2)
+
     def test_teacher_cannot_generate_practice(self) -> None:
         self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*", "role": "teacher"})
         response = self.client.post("/api/practice/generate", json={"count": 3})
