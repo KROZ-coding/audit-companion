@@ -1,5 +1,7 @@
 import asyncio
+import time
 from collections import deque
+import weakref
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import json
@@ -313,6 +315,21 @@ def _combined_error(errors: list[str]) -> str:
     return errors[-1]
 
 
+_ASYNC_CLIENTS: "weakref.WeakKeyDictionary[Any, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
+_ASYNC_CLIENT_LOCK = Lock()
+
+
+def _shared_async_client() -> httpx.AsyncClient:
+    """按事件循环复用 AsyncClient:避免每次请求重建 SSL 上下文(GIL 串行,约 2s/次)。"""
+    loop = asyncio.get_running_loop()
+    with _ASYNC_CLIENT_LOCK:
+        client = _ASYNC_CLIENTS.get(loop)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient()
+            _ASYNC_CLIENTS[loop] = client
+        return client
+
+
 class LLMClient:
     """OpenAI-compatible client with shared per-quota concurrency and failover."""
 
@@ -422,8 +439,17 @@ class LLMClient:
         queue_deadline = started + max(self.settings.llm_queue_timeout_seconds, 0)
         request_deadline = started + max(self.settings.llm_total_timeout_seconds, 0)
         errors = []
+        waited_for_cooldown = False
         for provider in providers[: self.settings.llm_max_attempts]:
             cooldown = _cooling(provider)
+            if cooldown and not waited_for_cooldown:
+                # 限流冷却通常只有几秒:等待一次而不是立刻放弃,把冷却窗口内的请求救回来。
+                budget = min(cooldown[0], 60.0, request_deadline - monotonic())
+                if budget > 0.05:
+                    logger.info("LLM channel cooling %.1fs; waiting once", cooldown[0])
+                    time.sleep(budget)
+                    waited_for_cooldown = True
+                    cooldown = _cooling(provider)
             if cooldown:
                 errors.append("cooling_down")
                 continue
@@ -581,8 +607,17 @@ class LLMClient:
         queue_deadline = started + max(self.settings.llm_queue_timeout_seconds, 0)
         request_deadline = started + max(self.settings.llm_total_timeout_seconds, 0)
         errors = []
+        waited_for_cooldown = False
         for provider in providers[: self.settings.llm_max_attempts]:
             cooldown = _cooling(provider)
+            if cooldown and not waited_for_cooldown:
+                # 限流冷却通常只有几秒:等待一次而不是立刻放弃,把冷却窗口内的请求救回来。
+                budget = min(cooldown[0], 60.0, request_deadline - monotonic())
+                if budget > 0.05:
+                    logger.info("LLM channel cooling %.1fs; waiting once", cooldown[0])
+                    await asyncio.sleep(budget)
+                    waited_for_cooldown = True
+                    cooldown = _cooling(provider)
             if cooldown:
                 errors.append("cooling_down")
                 continue
@@ -614,7 +649,8 @@ class LLMClient:
                     if remaining <= 0:
                         raise asyncio.TimeoutError
                     timeout = min(self.settings.llm_timeout_seconds, remaining)
-                    async with httpx.AsyncClient(timeout=timeout) as client:
+                    client = _shared_async_client()
+                    if True:
                         self.last_request_sent = True
                         response = await asyncio.wait_for(
                             client.post(

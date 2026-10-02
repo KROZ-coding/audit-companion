@@ -2553,6 +2553,35 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(body["status"], "ongoing")
         self.assertEqual(len(body["questions"]), 2)
 
+    def test_llm_waits_out_short_cooldown_instead_of_failing(self) -> None:
+        provider = LLMProvider(
+            "cdwait-test", "shared", "https://cdwait.test/v1", "key", "model", 4, 8, 1, "cdwait-test-unique",
+        )
+        settings = Settings(
+            llm_base_url="", llm_api_key="", llm_model="", llm_providers=(provider,),
+            llm_total_timeout_seconds=10, llm_queue_timeout_seconds=5,
+        )
+        calls = 0
+
+        def relay(request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(429, headers={"retry-after": "2"}, json={"error": "slow down"}, request=request)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]}, request=request)
+
+        original_client = httpx.Client
+        with patch(
+            "app.services.llm_client.httpx.Client",
+            side_effect=lambda **kwargs: original_client(transport=httpx.MockTransport(relay), **kwargs),
+        ):
+            first = LLMClient(settings, "shared").complete([{"role": "user", "content": "hello"}])
+            self.assertIsNone(first)
+            self.assertEqual(first is None, True)
+            second = LLMClient(settings, "shared").complete([{"role": "user", "content": "hello"}])
+        self.assertEqual(second, "ok")
+        self.assertEqual(calls, 2)
+
     def test_teacher_cannot_generate_practice(self) -> None:
         self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*", "role": "teacher"})
         response = self.client.post("/api/practice/generate", json={"count": 3})

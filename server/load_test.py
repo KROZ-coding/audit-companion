@@ -31,6 +31,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any
 
 import httpx
@@ -104,6 +106,39 @@ class Report:
         return "\n".join(rows)
 
 
+FAKE_LLM_ARRIVALS: list[float] = []
+
+
+class _FakeLLMHandler(BaseHTTPRequestHandler):
+    """Canned OpenAI-compatible completions for model-path stress tests."""
+
+    def do_POST(self):  # noqa: N802
+        FAKE_LLM_ARRIVALS.append(time.monotonic())
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        content = json.dumps({"questions": [
+            {"type": "single_choice", "stem": "下列哪项属于可靠的审计证据?", "options": ["银行询证函回函", "口头答复", "内部记账凭证", "传闻"], "answer": 0, "reference_answer": "询证函回函可靠性最高", "knowledge_points": ["审计证据"]},
+            {"type": "judge", "stem": "审计证据越多越好。", "answer": False, "reference_answer": "证据应当适当与充分", "knowledge_points": ["审计证据"]},
+            {"type": "fill", "stem": "函证获取的是______证据。", "answer": "外部书面", "reference_answer": "外部书面", "knowledge_points": ["函证"]},
+        ]}, ensure_ascii=False)
+        body = json.dumps({"choices": [{"message": {"content": content}}], "usage": {"prompt_tokens": 120, "completion_tokens": 180}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def start_fake_llm() -> tuple[Any, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeLLMHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}/v1"
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -123,13 +158,19 @@ def seed_users(data_dir: Path, users: int) -> None:
     print(f"已预置 {users} 个压测学生账号于 {data_dir}")
 
 
-def start_server(port: int, data_dir: Path, with_knowledge: bool) -> subprocess.Popen:
+def start_server(port: int, data_dir: Path, with_knowledge: bool, fake_llm_url: str | None = None) -> subprocess.Popen:
     env = os.environ.copy()
     env["DATA_DIR"] = str(data_dir)
     env["PERSISTENCE_ENABLED"] = "1"
     env["APP_ENV"] = "development"
     env["COOKIE_SECURE"] = "0"
     env["KNOWLEDGE_INDEX_PATH"] = str(REAL_KNOWLEDGE_INDEX if with_knowledge else data_dir / "knowledge" / "disabled.pkl")
+    if fake_llm_url:
+        env["SKIP_ENV_FILE"] = "1"
+        env.pop("LLM_PROVIDERS_JSON", None)
+        env["LLM_BASE_URL"] = fake_llm_url
+        env["LLM_API_KEY"] = "fake-key"
+        env["LLM_MODEL"] = "fake-model"
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
         cwd=str(SERVER_DIR), env=env,
@@ -212,6 +253,27 @@ async def run_user(client: httpx.AsyncClient, index: int, scenario: str, report:
         except Exception as error:
             phase.add(time.monotonic() - begin, f"load{index:03d}: {error}")
 
+    if scenario == "practice":
+        phase = report.line("practice_flow")
+        begin = time.monotonic()
+        try:
+            generated = await client.post("/api/practice/generate", json={
+                "course_id": COURSE_ID,
+                "count": 3,
+                "source_question": f"压测知识点{index}:审计证据的充分性与适当性",
+            })
+            generated.raise_for_status()
+            detail = generated.json()
+            answers = {question["id"]: 0 for question in detail["questions"]}
+            submitted = await client.post(f"/api/practice/{detail['id']}/submit", json={"answers": answers})
+            submitted.raise_for_status()
+            report.graded_subjective += 1 if submitted.json().get("result", {}).get("max_total") else 0
+            removed = await client.delete(f"/api/practice/{detail['id']}")
+            removed.raise_for_status()
+            phase.add(time.monotonic() - begin)
+        except Exception as error:
+            phase.add(time.monotonic() - begin, f"load{index:03d}: {error}")
+
     if scenario == "subjective":
         phase = report.line("subjective_submit")
         begin = time.monotonic()
@@ -267,11 +329,12 @@ async def drive(base_url: str, users: int, scenario: str, report: Report) -> Non
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--users", type=int, default=10)
-    parser.add_argument("--scenario", choices=["mixed", "objective", "subjective", "ask"], default="mixed")
+    parser.add_argument("--scenario", choices=["mixed", "objective", "subjective", "ask", "practice"], default="mixed")
     parser.add_argument("--no-knowledge", action="store_true", help="disable the local BM25 index (isolate the model path)")
     parser.add_argument("--json", help="write the raw report to this path")
     parser.add_argument("--keep", action="store_true", help="keep the temp data dir for inspection")
     parser.add_argument("--attach", metavar="URL", help="attach to an already-running instance instead of spawning one (users must already exist there)")
+    parser.add_argument("--fake-llm", action="store_true", help="point the spawned instance at a built-in canned LLM server (model-path stress without real API cost)")
     args = parser.parse_args()
 
     if args.attach:
@@ -294,9 +357,14 @@ def main() -> int:
     print(f"压测目录: {data_dir} · 端口: {port} · 场景: {args.scenario} · 知识检索: {'开' if not args.no_knowledge else '关'}")
     report = Report(users=args.users, scenario=args.scenario, with_knowledge=not args.no_knowledge)
     process = None
+    fake_server = None
+    fake_url = None
     try:
         seed_users(data_dir, args.users)
-        process = start_server(port, data_dir, with_knowledge=not args.no_knowledge)
+        if args.fake_llm:
+            fake_server, fake_url = start_fake_llm()
+            print(f"假模型服务: {fake_url}(真实 API 零消耗)")
+        process = start_server(port, data_dir, with_knowledge=not args.no_knowledge, fake_llm_url=fake_url)
         asyncio.run(wait_healthy(port))
         print(f"服务就绪，开始 {args.users} 人压测…")
         begin = time.monotonic()
@@ -322,8 +390,14 @@ def main() -> int:
             }
             Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"报告已写入 {args.json}")
+        if FAKE_LLM_ARRIVALS:
+            ordered = sorted(FAKE_LLM_ARRIVALS)
+            base = ordered[0]
+            print("假模型到达时间偏移(秒):", [round(x - base, 2) for x in ordered])
         return 0 if all(not stats.failures for stats in report.phases.values()) else 1
     finally:
+        if fake_server is not None:
+            fake_server.shutdown()
         if process is not None:
             process.terminate()
             try:
