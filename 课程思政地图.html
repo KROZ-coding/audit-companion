@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>审计课程思政地图 · 辐射状联动视图</title>
+<script src="vendor/d3.min.js"></script>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --line:#e2e8f0; --ink:#1e293b; --muted:#64748b;
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+}
+html.dark{--bg:#0e1526;--card:#182136;--line:#2c3b58;--ink:#dde5f2;--muted:#8fa0b8}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink);transition:background-color .4s var(--ease-out),color .4s var(--ease-out);overflow:hidden}
+#topbar{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:10px;padding:10px 18px;
+  background:rgba(20,30,50,.88);backdrop-filter:blur(8px);color:#fff}
+#topbar .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#2563eb,#8E24AA);display:flex;align-items:center;justify-content:center;font-size:14px}
+#topbar b{font-size:14.5px}
+#topbar .sub{font-size:12px;color:#cbd5e1}
+#topbar .k{color:#64b5f6}#topbar .c{color:#81c784}#topbar .p{color:#ce93d8}
+#topbar .sp{flex:1}
+#topbar .theme-btn{width:32px;height:32px;border-radius:7px;border:1px solid rgba(255,255,255,.3);background:none;color:#e2e8f0;font-size:15px;cursor:pointer}
+#topbar .fit-btn{height:32px;padding:0 10px;border:1px solid rgba(255,255,255,.3);border-radius:6px;background:none;color:#e2e8f0;font:inherit;font-size:12px;cursor:pointer}
+#legend{position:fixed;bottom:16px;left:16px;z-index:50;background:rgba(20,30,50,.85);backdrop-filter:blur(8px);
+  color:#fff;border-radius:10px;padding:11px 15px;font-size:12px;line-height:2}
+#legend .li{display:flex;align-items:center;gap:8px}
+#legend .dot{width:10px;height:10px;border-radius:50%}
+#legend .dim-title{font-weight:700;margin-top:4px}
+#svg-wrap{position:fixed;inset:0;top:52px}
+#svg-wrap svg{width:100%;height:100%;display:block}
+.hint{position:fixed;bottom:16px;right:16px;z-index:50;background:rgba(20,30,50,.85);backdrop-filter:blur(8px);
+  color:#cbd5e1;border-radius:8px;padding:7px 13px;font-size:11.5px}
+/* 节点详情弹层 */
+#detail{position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;background:rgba(10,16,30,.55);padding:20px}
+#detail.show{display:flex}
+.dcard{width:min(480px,100%);background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:20px 22px;
+  box-shadow:0 18px 50px rgba(2,8,23,.4);animation:pop .22s var(--ease-out)}
+@keyframes pop{from{opacity:0;transform:scale(.95) translateY(8px)}to{opacity:1;transform:none}}
+.dcard .dt{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px}
+.dcard h3{margin:0;font-size:16px}
+.dcard .tag{font-size:11px;padding:2px 10px;border-radius:999px;color:#fff;flex:none}
+.dcard .sec{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;margin:13px 0 4px}
+.dcard .tx{font-size:13.5px;line-height:1.75;margin:0}
+.dcard .close{border:none;background:none;color:var(--muted);cursor:pointer;font-size:14px}
+.dcard .close:hover{color:var(--ink)}
+@media (prefers-reduced-motion:reduce){.dcard{animation:none}}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="mark">🧭</span>
+  <b>审计课程思政地图</b>
+   <span class="sub"><span class="k">知识图谱（学什么）</span> → <span class="c">岗位能力图谱（做什么）</span> → <span class="p">课程思政图谱（铸什么魂）</span></span>
+   <span class="sp"></span>
+   <button class="fit-btn" id="fitBtn" title="适应画布">适应画布</button>
+   <button class="theme-btn" id="themeBtn" title="切换深色 / 浅色模式">🌙</button>
+</div>
+<div id="legend">
+  <div class="li"><div class="dot" style="background:#1565C0"></div>知识图谱</div>
+  <div class="li"><div class="dot" style="background:#2E7D32"></div>岗位能力图谱</div>
+  <div class="li"><div class="dot" style="background:#8E24AA"></div>课程思政图谱</div>
+  <div class="dim-title">思政三维度</div>
+  <div class="li"><div class="dot" style="background:#1565C0"></div>A · 职业伦理</div>
+  <div class="li"><div class="dot" style="background:#E65100"></div>B · 数智素养</div>
+  <div class="li"><div class="dot" style="background:#C62828"></div>C · 国家治理</div>
+</div>
+ <div class="hint">滚轮缩放 · 拖拽节点/画布 · 点击节点查看详情与映射</div>
+<div id="svg-wrap"></div>
+
+<div id="detail">
+  <div class="dcard">
+    <div class="dt"><h3 id="dTitle"></h3><span class="tag" id="dTag"></span><button class="close" onclick="closeDetail()">✕</button></div>
+    <p class="sec">所属图谱 / 维度</p>
+    <p class="tx" id="dDim"></p>
+    <p class="sec">节点说明</p>
+    <p class="tx" id="dText"></p>
+    <p class="sec" id="dSzTitle"></p>
+    <p class="tx" id="dSz" style="color:#8E24AA;font-weight:700"></p>
+  </div>
+</div>
+
+<script>
+/* ===== 数据（来自教师提供的课程思政三图谱素材） ===== */
+const graphData = {
+  knowledge: {
+    a: [
+      { name: '审计基础理论', detail: '审计的概念、目标、原则、职能，审计重要性与审计风险模型，审计发展史与演进脉络', sizheng: '诚信为本 · 不做假账' },
+      { name: '审计准则与法规', detail: '中国注册会计师审计准则体系、内部审计准则、国家审计准则及相关法规', sizheng: '法治意识 · 准则为纲' },
+      { name: '审计职业道德', detail: '独立性要求、职业道德基本原则（诚信、客观、专业胜任能力、保密）、职业道德防范措施', sizheng: '廉洁自律 · 客观公正' },
+      { name: '审计风险与重要性', detail: '审计风险模型（固有风险×控制风险×检查风险）、重要性水平的确定与运用', sizheng: '底线思维 · 风险意识' }
+    ],
+    b: [
+      { name: 'Python审计编程', detail: '审计数据采集、清洗、分析的Python编程基础，审计抽样与比对的自动化实现', sizheng: '科技强国 · 数智赋能' },
+      { name: 'AI审计工具应用', detail: '智能审计平台操作流程、AI辅助审计决策、大语言模型在审计中的应用场景', sizheng: '创新意识 · 技术驱动' },
+      { name: '审计大数据分析', detail: '海量审计数据的智能分析方法、可视化呈现、异常模式识别与风险预警', sizheng: '精益求精 · 数据说话' }
+    ],
+    c: [
+      { name: '审计程序与方法', detail: '检查、观察、询问、函证、重新计算、重新执行、分析程序七大审计程序', sizheng: '求真务实 · 严谨细致' },
+      { name: '审计证据与工作底稿', detail: '审计证据的充分性与适当性、工作底稿编制与复核规范、审计档案管理制度', sizheng: '一丝不苟 · 精益求精' },
+      { name: '审计报告与意见', detail: '无保留意见、保留意见、否定意见、无法表示意见的出具条件与审计报告撰写', sizheng: '公众利益 · 社会担当' },
+      { name: '国家审计与治理', detail: '国家审计在治理体系中的作用、审计监督与纪检监察贯通协同、审计全覆盖', sizheng: '国家治理 · 制度优势' }
+    ]
+  },
+  competency: {
+    a: [
+      { name: '准则解读能力', detail: '准确理解并引用具体审计准则条文，正确判断准则适用条件', knowledge_link: '审计准则与法规' },
+      { name: '职业判断能力', detail: '在审计全过程中运用专业判断，合理确定重要性水平、评估审计风险', knowledge_link: '审计风险与重要性' },
+      { name: '职业道德践行', detail: '识别独立性威胁、评估不利影响、采取适当防范措施维护职业道德', knowledge_link: '审计职业道德' },
+      { name: '风险识别能力', detail: '通过了解被审计单位及其环境，识别和评估财务报表层次和认定层次的重大错报风险', knowledge_link: '审计风险与重要性' }
+    ],
+    b: [
+      { name: 'AI工具操作', detail: '熟练使用智能审计平台进行数据分析、风险识别和审计辅助决策', knowledge_link: 'AI审计工具应用' },
+      { name: '数据分析能力', detail: '运用Python和大数据工具对审计数据进行采集、清洗、分析和可视化', knowledge_link: 'Python审计编程' },
+      { name: '数智创新应用', detail: '结合审计场景设计创新的数智化解决方案，推动审计工作智能化升级', knowledge_link: '审计大数据分析' }
+    ],
+    c: [
+      { name: '审计沟通能力', detail: '与被审计单位管理层、治理层进行有效沟通，清晰表达审计发现', knowledge_link: '审计程序与方法' },
+      { name: '报告撰写能力', detail: '撰写结构完整、措辞规范、意见恰当的审计报告，准确披露关键审计事项', knowledge_link: '审计报告与意见' },
+      { name: '职业怀疑态度', detail: '对审计证据保持质疑思维，不轻信管理层声明，审慎评价相互矛盾的证据', knowledge_link: '审计证据与工作底稿' },
+      { name: '宏观治理能力', detail: '从国家治理高度理解审计监督职能，服务经济社会高质量发展大局', knowledge_link: '国家审计与治理' }
+    ]
+  },
+  sizheng: {
+    a: [
+      { name: '诚信为本', detail: '培育"不做假账"的职业底线意识，树立以诚立身、以信立业的价值观，理解诚信是审计行业的生命线' },
+      { name: '法治意识', detail: '培养遵纪守法、依规执业的自觉性，理解审计准则体系的法治内涵，树立"准则为纲"的执业理念' },
+      { name: '廉洁从审', detail: '培育清正廉洁的职业品格，理解"公生明、廉生威"的深刻含义，能够在利益冲突中坚守道德底线' },
+      { name: '客观公正', detail: '培养实事求是、不偏不倚的职业态度，在审计判断中排除个人偏见和外部干扰，确保审计结论客观公正' }
+    ],
+    b: [
+      { name: '科技强国', detail: '理解数智技术赋能国家治理的战略意义，树立科技强审理念，增强科技报国的使命感与责任感' },
+      { name: '创新驱动', detail: '培养敢于突破、善于创新的科学精神，在审计实践中运用新技术新方法提升审计质量与效率' },
+      { name: '精益求精', detail: '培育追求卓越的工匠态度，在数据分析中力求精准、在程序设计上追求最优，不放过任何异常细节' }
+    ],
+    c: [
+      { name: '求真务实', detail: '培养脚踏实地、追求真理的品质，在审计实践中坚持"以事实为依据、以准则为准绳"的基本原则' },
+      { name: '人民立场', detail: '理解审计工作服务人民、服务社会的根本宗旨，树立"审计为民"的价值追求，增强社会责任感' },
+      { name: '制度自信', detail: '理解中国特色社会主义审计制度的独特优势，增强对党和国家监督体系的信心，坚定制度自信' },
+      { name: '大国担当', detail: '理解审计在国家治理现代化中的重要作用，认识审计在防范重大风险、维护经济安全中的使命担当' }
+    ]
+  }
+};
+const crossMappings = [
+  { from: 'knowledge-a-0', to: 'sizheng-a-0', color: '#1565C0' },
+  { from: 'knowledge-a-1', to: 'sizheng-a-1', color: '#1565C0' },
+  { from: 'knowledge-a-2', to: 'sizheng-a-2', color: '#1565C0' },
+  { from: 'knowledge-a-2', to: 'sizheng-a-3', color: '#1565C0' },
+  { from: 'knowledge-a-3', to: 'sizheng-a-3', color: '#1565C0' },
+  { from: 'competency-a-2', to: 'sizheng-a-3', color: '#1565C0' },
+  { from: 'knowledge-b-0', to: 'sizheng-b-0', color: '#E65100' },
+  { from: 'knowledge-b-1', to: 'sizheng-b-1', color: '#E65100' },
+  { from: 'knowledge-b-2', to: 'sizheng-b-2', color: '#E65100' },
+  { from: 'competency-b-2', to: 'sizheng-b-1', color: '#E65100' },
+  { from: 'knowledge-c-0', to: 'sizheng-c-0', color: '#C62828' },
+  { from: 'knowledge-c-1', to: 'sizheng-c-0', color: '#C62828' },
+  { from: 'knowledge-c-2', to: 'sizheng-c-1', color: '#C62828' },
+  { from: 'knowledge-c-3', to: 'sizheng-c-2', color: '#C62828' },
+  { from: 'knowledge-c-3', to: 'sizheng-c-3', color: '#C62828' },
+  { from: 'competency-c-3', to: 'sizheng-c-3', color: '#C62828' }
+];
+const dimColors={a:'#1565C0',b:'#E65100',c:'#C62828'};
+const dimNames={a:'职业伦理',b:'数智素养',c:'国家治理'};
+const graphColors={knowledge:'#1565C0',competency:'#2E7D32',sizheng:'#8E24AA'};
+const graphNames={knowledge:'知识图谱',competency:'岗位能力图谱',sizheng:'课程思政图谱'};
+
+/* ===== 建图：root → 9 branch → 38 leaf，+ 跨图谱思政映射 ===== */
+const nodes=[],links=[],nodeMap={};
+nodes.push({id:'root',label:'审计课程思政',type:'root',graph:'root',dim:'root',detail:'',radius:30});
+nodeMap['root']=nodes[0];
+const branchLabels={knowledge:{a:'审计基础理论',b:'数智审计知识',c:'审计实务知识'},
+  competency:{a:'专业胜任力',b:'数智技能',c:'职业素养'},
+  sizheng:{a:'职业伦理',b:'数智素养',c:'国家治理'}};
+['a','b','c'].forEach(dim=>{
+  ['knowledge','competency','sizheng'].forEach(g=>{
+    const bId=`${g}-${dim}`;
+    nodes.push({id:bId,label:branchLabels[g][dim],type:'branch',graph:g,dim,detail:'',radius:17});
+    nodeMap[bId]=nodes[nodes.length-1];
+    links.push({source:'root',target:bId,dim,type:'hierarchy'});
+  });
+});
+['a','b','c'].forEach(dim=>{
+  ['knowledge','competency','sizheng'].forEach(g=>{
+    graphData[g][dim].forEach((item,idx)=>{
+      const lId=`${g}-${dim}-${idx}`;
+      nodes.push({id:lId,label:item.name,type:'leaf',graph:g,dim,detail:item.detail,
+        radius:10,sizheng:item.sizheng||null,knowledge_link:item.knowledge_link||null});
+      nodeMap[lId]=nodes[nodes.length-1];
+      links.push({source:`${g}-${dim}`,target:lId,dim,type:'hierarchy'});
+    });
+  });
+});
+crossMappings.forEach(m=>links.push({source:m.from,target:m.to,dim:m.from.split('-')[1],type:'cross',color:m.color}));
+
+/* ===== 渲染：固定中心放射布局 ===== */
+const wrap=document.getElementById('svg-wrap');
+const svg=d3.select('#svg-wrap').append('svg');
+const defs=svg.append('defs');
+['a','b','c'].forEach(dim=>{
+  defs.append('marker').attr('id',`arrow-${dim}`)
+    .attr('viewBox','0 0 10 10').attr('refX',9).attr('refY',5)
+    .attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
+    .append('polygon').attr('points','0,1 10,5 0,9').attr('fill',dimColors[dim]).attr('opacity',.45);
+});
+const g=svg.append('g');
+let viewTransform=d3.zoomIdentity;
+const zoom=d3.zoom().scaleExtent([.35,3.5]).on('zoom',ev=>{viewTransform=ev.transform;g.attr('transform',viewTransform);});
+svg.call(zoom).on('dblclick.zoom',null);
+document.getElementById('fitBtn').onclick=fitGraph;
+const W=()=>wrap.clientWidth,H=()=>wrap.clientHeight;
+const graphAngles={knowledge:-Math.PI/2,competency:Math.PI/6,sizheng:5*Math.PI/6};
+const dimOffsets={a:-.62,b:0,c:.62};
+links.forEach(link=>{link.source=nodeMap[link.source];link.target=nodeMap[link.target];});
+const linkG=g.append('g');
+const linkSel=linkG.selectAll('line')
+  .data(links).join('line')
+  .attr('stroke',d=>d.type==='cross'?(d.color||'#999'):(d.dim==='root'?'#8fa0b8':dimColors[d.dim]))
+  .attr('stroke-opacity',d=>d.type==='cross'?0:.42)
+  .attr('stroke-width',d=>d.type==='cross'?1.6:(d.source.type==='root'?2.2:1.4))
+  .attr('stroke-dasharray',d=>d.type==='cross'?'6 4':null)
+  .attr('marker-end',d=>d.type==='cross'?`url(#arrow-${d.dim})`:null);
+
+const nodeG=g.append('g');
+const nodeSel=nodeG.selectAll('g.node')
+  .data(nodes).join('g').attr('class','node').style('cursor','pointer');
+nodeSel.append('title').text(d=>d.label);
+
+nodeSel.append('circle')
+  .attr('r',d=>d.radius)
+  .attr('fill',d=>d.type==='root'?'#8E24AA':d.type==='branch'?graphColors[d.graph]:(d.graph==='sizheng'?'#f3e5f5':d.graph==='knowledge'?'#e3f2fd':'#e8f5e9'))
+  .attr('stroke',d=>d.type==='leaf'?graphColors[d.graph]:'#fff')
+  .attr('stroke-width',d=>d.type==='leaf'?2:1.5)
+  .attr('filter','drop-shadow(0 1px 3px rgba(2,8,23,.25))');
+nodeSel.filter(d=>d.graph==='sizheng'&&d.type==='leaf').select('circle').attr('fill','#8E24AA').attr('stroke','#fff');
+nodeSel.filter(d=>d.graph==='sizheng'&&d.type==='leaf').append('text')
+  .attr('class','sz-glyph').attr('text-anchor','middle').attr('dy',4).attr('fill','#fff').attr('font-size',11).attr('font-weight',700).text('思');
+
+nodeSel.append('text')
+  .attr('dy',d=>d.type==='branch'?-22:0)
+  .attr('text-anchor','middle')
+  .attr('fill',d=>d.type==='leaf'?(d.graph==='sizheng'?'#8E24AA':'#334155'):'#fff')
+  .attr('font-size',d=>d.type==='root'?15:d.type==='branch'?11:10)
+  .attr('font-weight',d=>d.type==='leaf'?600:700)
+  .attr('pointer-events','none')
+  .text(d=>d.type==='root'?d.label:(d.type==='branch'?d.label:(d.label.length>5?d.label.slice(0,5)+'…':d.label)));
+
+function layoutNodes(){
+  const width=W(),height=H();if(width<100||height<100)return;
+  const cx=width/2,cy=height/2;
+  nodes.forEach(node=>{
+    if(node.type==='root'){node.angle=0;node.radius=0;node.x=cx;node.y=cy;return;}
+    const center=graphAngles[node.graph];
+    const branchAngle=center+dimOffsets[node.dim];
+    if(node.type==='branch'){node.angle=branchAngle;node.radius=145;}
+    else{
+      const index=Number(node.id.split('-')[2]);
+      const count=graphData[node.graph][node.dim].length;
+      node.angle=branchAngle+(index-(count-1)/2)*.21;
+      node.radius=400+(index%2)*24;
+    }
+    node.x=cx+Math.cos(node.angle)*node.radius;
+    node.y=cy+Math.sin(node.angle)*node.radius;
+  });
+  linkSel
+    .attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+    .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+  nodeSel.attr('transform',d=>`translate(${d.x},${d.y})`);
+  nodeSel.selectAll('text:not(.sz-glyph)')
+    .attr('transform',d=>{
+      if(d.type==='root')return null;
+      if(d.type==='branch'){d.textAnchor='middle';return null;}
+      const horizontal=Math.cos(d.angle),vertical=Math.sin(d.angle);
+      if(Math.abs(horizontal)<.32){d.textAnchor='middle';return `translate(0,${vertical<0?-16:19})`;}
+      d.textAnchor=horizontal>0?'start':'end';
+      return `translate(${horizontal>0?15:-15},4)`;
+    })
+    .attr('text-anchor',d=>d.type==='root'?'middle':d.textAnchor);
+  fitGraph();
+}
+function fitGraph(){
+  const width=W(),height=H();if(width<100||height<100)return;
+  const extent=455;
+  const scale=Math.max(.35,Math.min(1,(width-36)/(extent*2),(height-36)/(extent*2)));
+  svg.call(zoom.transform,d3.zoomIdentity.translate(width/2*(1-scale),height/2*(1-scale)).scale(scale));
+}
+
+/* 交互：拖动画布、缩放、轻移节点、点击详情 */
+nodeSel.call(d3.drag()
+  .on('drag',(ev,d)=>{d.x=ev.x;d.y=ev.y;nodeSel.attr('transform',n=>`translate(${n.x},${n.y})`);linkSel.attr('x1',link=>link.source.x).attr('y1',link=>link.source.y).attr('x2',link=>link.target.x).attr('y2',link=>link.target.y);}));
+
+nodeSel.on('click',(ev,d)=>{
+  if(ev.defaultPrevented)return;
+  linkSel.attr('stroke-opacity',link=>(link.source===d||link.target===d)?0.82:(link.type==='cross'?0.09:0.2));
+  openDetail(d);
+});
+svg.on('click',ev=>{if(ev.target===svg.node())linkSel.attr('stroke-opacity',link=>link.type==='cross'?0:.42);});
+
+function openDetail(d){
+  document.getElementById('dTitle').textContent=d.label;
+  const tag=document.getElementById('dTag');
+  tag.textContent=d.type==='root'?'中心':graphNames[d.graph]+(d.type==='branch'?' · 维度':'');
+  tag.style.background=d.type==='root'?'#8E24AA':graphColors[d.graph];
+  document.getElementById('dDim').textContent=
+    d.type==='root'?'整门课程的思政总纲':`${graphNames[d.graph]} · ${dimNames[d.dim]}维度`;
+  document.getElementById('dText').textContent=d.detail||'本节点为课程图谱的结构节点，点击叶子节点查看具体内容。';
+  const szT=document.getElementById('dSzTitle'),sz=document.getElementById('dSz');
+  if(d.sizheng){szT.style.display='block';sz.style.display='block';szT.textContent='对应思政要素';sz.textContent=d.sizheng;}
+  else if(d.knowledge_link){szT.style.display='block';sz.style.display='block';szT.textContent='联动知识点';sz.textContent=d.knowledge_link;}
+  else{szT.style.display='none';sz.style.display='none';}
+  document.getElementById('detail').classList.add('show');
+}
+function closeDetail(){document.getElementById('detail').classList.remove('show');}
+document.getElementById('detail').addEventListener('click',e=>{if(e.target.id==='detail')closeDetail();});
+addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
+
+const resizeObserver=new ResizeObserver(layoutNodes);
+resizeObserver.observe(wrap);
+addEventListener('resize',layoutNodes);
+layoutNodes();
+
+/* ===== 主题切换（独立页，自管） ===== */
+const ICONS={light:'🌙',dark:'☀️'};
+function applyTheme(dark){
+  document.documentElement.classList.toggle('dark',dark);
+  document.getElementById('themeBtn').textContent=ICONS[dark?'dark':'light'];
+  /* 深浅色下叶子节点文字对比度 */
+  nodeSel.selectAll('text').attr('fill',function(d){
+    if(this.classList.contains('sz-glyph')||d.type==='root')return '#fff';
+    if(d.type==='leaf')return d.graph==='sizheng'?(dark?'#ce93d8':'#8E24AA'):(dark?'#a5c8e8':'#334155');
+    return dark?'#dde5f2':'#1e293b';
+  });
+}
+applyTheme(matchMedia('(prefers-color-scheme: dark)').matches);
+addEventListener('message',event=>{
+  if(event.origin!==location.origin||event.data?.type!=='audit-theme')return;
+  applyTheme(Boolean(event.data.dark));
+});
+document.getElementById('themeBtn').onclick=()=>{
+  applyTheme(!document.documentElement.classList.contains('dark'));
+};
+</script>
+</body>
+</html>

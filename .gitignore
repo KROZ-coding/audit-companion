@@ -1,0 +1,19 @@
+# 敏感与本地环境（绝不入库）
+server/.env
+.env
+.env.local
+
+# Python 运行产物
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 本地运行数据与虚拟环境
+server/.venv/
+server/data/
+
+# 知识库原始语料（约 750MB，另行分发，不入库）
+审计学知识库/
+
+# 本地压测报告（运行产物）
+server/loadtest_*.json

@@ -1,0 +1,2525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>经管数智审计智能学伴 · 运行版</title>
+<style>
+:root{
+  --accent:#2563eb; --accent-dim:#1e40af; --teal:#0d9488; --amber:#d97706; --rose:#e11d48; --violet:#7c3aed; --green:#16a34a;
+  --ink:#1e293b; --muted:#64748b; --bg:#f8fafc; --card:#ffffff; --line:#e2e8f0; --line2:#cbd5e1;
+  --radius:8px; --shadow:0 1px 2px rgba(15,23,42,.06);
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
+  --ease-in-out:cubic-bezier(0.77,0,0.175,1);
+  --ease-swipe:cubic-bezier(0.16,1,0.3,1);
+  /* 主题色变完全由遮罩动画承载：页面自身不做背景渐变（避免遮罩半透明期间露出中间色导致闪烁） */
+  --theme-dur:0s;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;background:var(--bg);color:var(--ink);line-height:1.65;
+  transition:background-color var(--theme-dur) var(--ease-swipe),color var(--theme-dur) var(--ease-swipe)}
+html.dark{--ink:#dde5f2;--muted:#8fa0b8;--bg:#0e1526;--card:#182136;--line:#2c3b58;--line2:#41527a;--shadow:0 1px 2px rgba(0,0,0,.45)}
+html.dark{--accent:#5b8cff;--accent-dim:#7ca3ff;--teal:#2dd4bf;--amber:#f59e0b;--rose:#fb7185;--green:#4ade80;--violet:#a78bfa}
+html.dark header.sh,html.dark .login-side{background:#0c1322!important}
+button{font-family:inherit}
+/* 主题切换：原生 View Transition 圆形扩散（圆心由 --tx/--ty 指定） */
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-new(root){animation:themeReveal .45s var(--ease-swipe) both}
+@keyframes themeReveal{
+  from{clip-path:circle(0% at var(--tx,50%) var(--ty,50%))}
+  to{clip-path:circle(150% at var(--tx,50%) var(--ty,50%))}
+}
+
+/* ============ 登录页 ============ */
+#login{position:fixed;inset:0;z-index:100;display:grid;grid-template-columns:1fr 460px}
+.login-side{position:relative;background:linear-gradient(160deg,#1e3a8a,#2563eb 55%,#0d9488);color:#fff;
+  display:flex;flex-direction:column;justify-content:center;padding:64px 72px;overflow:hidden}
+.login-side h2{font-size:40px;margin:0 0 16px;line-height:1.35;letter-spacing:.5px;position:relative;z-index:2}
+.login-side p{opacity:.92;font-size:16.5px;max-width:480px;margin:8px 0;position:relative;z-index:2}
+.login-side .pts{margin-top:30px;font-size:16px;line-height:2.3;opacity:.95;position:relative;z-index:2}
+
+/* 代码海洋：WebGL 粒子层铺底，文字压在上方；深色更浓，浅色更淡 */
+.code-sea{position:absolute;inset:0;z-index:1;pointer-events:none;
+  -webkit-mask-image:linear-gradient(to top,#000 0%,rgba(0,0,0,.55) 45%,transparent 85%);
+  mask-image:linear-gradient(to top,#000 0%,rgba(0,0,0,.55) 45%,transparent 85%)}
+.login-side::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:linear-gradient(160deg,rgba(30,58,138,.25),rgba(13,148,136,.12));mix-blend-mode:multiply}
+.login-panel{display:flex;flex-direction:column;justify-content:center;padding:40px 48px;background:var(--card);position:relative;transition:background-color var(--theme-dur) var(--ease-swipe)}
+.login-panel .theme-btn{position:absolute;top:18px;right:18px}
+.login-panel .lg{width:46px;height:46px;border-radius:11px;background:linear-gradient(135deg,#2563eb,#0d9488);
+  display:flex;align-items:center;justify-content:center;font-size:23px;margin-bottom:16px}
+.login-panel h1{font-size:20px;margin:0 0 2px}
+.login-panel .sub{font-size:13px;color:var(--muted);margin:0 0 22px}
+.seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:3px;margin-bottom:14px}
+.seg button{flex:1;border:none;background:none;padding:8px 0;border-radius:6px;font-size:13.5px;cursor:pointer;color:var(--muted);
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out)}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:var(--shadow)}
+html.dark .seg button.on{background:#28375a}
+.field{margin-bottom:13px}
+.field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px;font-weight:600}
+.field input{width:100%;border:1.5px solid var(--line);border-radius:var(--radius);padding:10px 13px;font-size:14px;
+  background:var(--card);color:var(--ink);transition:border-color .15s var(--ease-out),background-color var(--theme-dur) var(--ease-swipe),color var(--theme-dur) var(--ease-swipe)}
+.field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}
+.login-err{font-size:12.5px;color:var(--rose);min-height:18px;margin:-3px 0 8px}
+.login-note{margin:16px 0 0;font-size:12px;color:var(--muted);line-height:1.7}
+.admin-hint{display:none;font-size:12px;color:var(--amber);background:rgba(217,119,6,.09);border-left:3px solid var(--amber);
+  padding:6px 11px;border-radius:0 6px 6px 0;margin-bottom:10px}
+.admin-hint.show{display:block;animation:fadein .2s var(--ease-out)}
+@media (max-width:820px){#login{grid-template-columns:1fr}.login-side{display:none}}
+
+/* ============ 顶部栏 ============ */
+header.sh{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;padding:0 20px;height:52px;
+  background:#1e293b;color:#fff}
+header.sh .logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:14.5px}
+header.sh .logo .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#2563eb,#0d9488);
+  display:flex;align-items:center;justify-content:center;font-size:14px}
+header.sh .demo-tag{font-size:11px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);padding:1px 10px;border-radius:999px;color:#cbd5e1}
+header.sh .sp{flex:1}
+.userchip{display:flex;align-items:center;gap:7px;font-size:12.5px;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.2);padding:3px 11px;border-radius:999px}
+.userchip .role{font-size:10.5px;padding:1px 8px;border-radius:999px;background:var(--accent)}
+.userchip .role.admin{background:var(--rose)}
+.userchip .role.teacher{background:var(--teal)}
+.logout-btn{border:1px solid rgba(255,255,255,.3);background:none;color:#cbd5e1;border-radius:6px;
+  padding:4px 12px;font-size:12px;cursor:pointer;transition:background-color .15s ease,color .15s ease}
+.logout-btn:hover{background:rgba(255,255,255,.12);color:#fff}
+.theme-btn{width:32px;height:32px;border-radius:7px;border:1px solid rgba(255,255,255,.3);background:none;
+  font-size:15px;cursor:pointer;color:#e2e8f0;display:flex;align-items:center;justify-content:center;
+  transition:background-color .15s var(--ease-out),transform 140ms var(--ease-out)}
+.theme-btn:active{transform:scale(.92)}
+.theme-btn:hover{background:rgba(255,255,255,.12)}
+.login-panel .theme-btn{border-color:var(--line2);background:var(--bg);color:var(--ink);width:34px;height:34px}
+.login-panel .theme-btn:hover{background:var(--line)}
+
+/* ============ 布局 ============ */
+.wrap{max-width:1200px;margin:20px auto 60px;padding:0 20px;display:grid;grid-template-columns:200px 1fr;gap:18px;align-items:start}
+nav{position:sticky;top:68px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:7px;
+  transition:background-color var(--theme-dur) var(--ease-swipe),border-color var(--theme-dur) var(--ease-swipe)}
+nav .group{font-size:10.5px;color:var(--muted);letter-spacing:1px;padding:8px 10px 4px;font-weight:700}
+nav button{display:flex;align-items:center;gap:8px;width:100%;border:none;background:none;padding:8px 10px;border-radius:6px;
+  font-size:13.5px;color:var(--ink);cursor:pointer;text-align:left;transition:background-color .12s var(--ease-out),color .12s var(--ease-out)}
+nav button:hover{background:var(--bg)}
+html.dark nav button:hover{background:#22304f}
+nav button.active{background:var(--accent);color:#fff;font-weight:600}
+nav .tip{font-size:11px;color:var(--muted);padding:7px 10px 3px;line-height:1.55;border-top:1px solid var(--line);margin-top:6px}
+main{min-width:0}
+.panel{display:none}
+.panel.show{display:block;animation:fadein .18s var(--ease-out)}
+@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;margin-bottom:16px;
+  transition:background-color var(--theme-dur) var(--ease-swipe),border-color var(--theme-dur) var(--ease-swipe)}
+.card h2{margin:0 0 4px;font-size:16px;display:flex;align-items:center;gap:8px}
+.card .desc{font-size:12.5px;color:var(--muted);margin:0 0 14px}
+.card-head-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px}
+.card-head-row h2{margin-bottom:4px}
+
+/* ============ 表格 / 列表 ============ */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--bg);color:var(--muted);text-align:left;font-weight:600;font-size:12px;padding:7px 11px;border-bottom:1.5px solid var(--line)}
+html.dark th{background:#22304f}
+td{padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr{transition:background-color .12s var(--ease-out)}
+tbody tr:hover{background:var(--bg)}
+html.dark tbody tr:hover{background:#22304f}
+.pill{display:inline-block;font-size:11px;padding:1px 9px;border-radius:999px;font-weight:600}
+.pill.ok{background:rgba(22,163,74,.12);color:var(--green)}
+.pill.bad{background:rgba(225,29,72,.1);color:var(--rose)}
+.pill.mid{background:rgba(217,119,6,.1);color:var(--amber)}
+.pill.info{background:rgba(37,99,235,.1);color:var(--accent)}
+html.dark .pill.ok{background:rgba(74,222,128,.14)}
+html.dark .pill.bad{background:rgba(251,113,133,.14)}
+html.dark .pill.mid{background:rgba(245,158,11,.14)}
+html.dark .pill.info{background:rgba(91,140,255,.16)}
+
+/* ============ 按钮/输入 ============ */
+.btn{border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;
+  transition:transform 140ms var(--ease-out),background-color .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-dim)}
+.btn.ghost{background:none;border:1.5px solid var(--line2);color:var(--ink)}
+.btn.ghost:hover{border-color:var(--accent);color:var(--accent)}
+.btn.sm{padding:5px 12px;font-size:12px}
+.btn.danger{background:var(--rose);color:#fff}
+.btnrow{display:flex;gap:9px;margin-top:13px;flex-wrap:wrap;align-items:center}
+input[type=text],textarea{border:1.5px solid var(--line);border-radius:6px;padding:9px 12px;font-size:13.5px;
+  font-family:inherit;background:var(--card);color:var(--ink);transition:border-color .15s var(--ease-out),background-color var(--theme-dur) var(--ease-swipe),color var(--theme-dur) var(--ease-swipe)}
+input[type=text]:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
+textarea{width:100%;min-height:74px;resize:vertical}
+
+/* ============ 测验 ============ */
+.qcard{border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin:11px 0;animation:fadein .2s var(--ease-out);
+  transition:border-color .15s var(--ease-out),background-color .4s var(--ease-out)}
+.qcard .qh{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.qcard .qh .tag{font-size:11px;padding:1px 9px;border-radius:999px;background:rgba(37,99,235,.1);color:var(--accent);font-weight:600}
+.qcard .qh .score{font-size:11px;color:var(--muted)}
+.qcard .stem{font-size:13.5px;font-weight:600;margin-bottom:8px}
+.opts label{display:flex;align-items:flex-start;gap:8px;padding:7px 11px;border:1.5px solid var(--line);border-radius:6px;margin:5px 0;font-size:13px;cursor:pointer;
+  transition:border-color .12s var(--ease-out),background-color .12s var(--ease-out)}
+.opts label:hover{border-color:var(--accent);background:rgba(37,99,235,.05)}
+.opts input{accent-color:var(--accent);margin-top:3px}
+.grade{border-radius:6px;padding:11px 14px;margin:9px 0;font-size:13px;animation:fadein .2s var(--ease-out)}
+.g-ok{background:rgba(22,163,74,.07);border-left:3px solid var(--green)}
+.g-bad{background:rgba(225,29,72,.06);border-left:3px solid var(--rose)}
+.g-half{background:rgba(217,119,6,.06);border-left:3px solid var(--amber)}
+.grade .gh{display:flex;justify-content:space-between;font-weight:700;margin-bottom:3px;font-size:12.5px}
+.g-ok .gh{color:var(--green)}.g-bad .gh{color:var(--rose)}.g-half .gh{color:var(--amber)}
+.grade .why{font-size:12px;color:var(--muted)}
+.total{display:flex;align-items:center;gap:14px;background:var(--bg);border:1.5px solid var(--line);border-radius:var(--radius);
+  padding:13px 18px;margin:13px 0 5px;animation:fadein .22s var(--ease-out)}
+html.dark .total{background:#22304f}
+.total .num{font-size:30px;font-weight:800;color:var(--accent)}
+.ring{width:64px;height:64px;position:relative;flex:none}
+.ring svg{transform:rotate(-90deg)}
+.ring .pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:var(--teal)}
+.ring circle{fill:none;stroke-width:6.5;stroke-linecap:round}
+.ring .bgc{stroke:var(--line)}
+.ring .fg{stroke:var(--teal);stroke-dasharray:176;stroke-dashoffset:176;transition:stroke-dashoffset .8s var(--ease-out) .25s}
+
+/* ============ 掌握度条 ============ */
+.bar{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12.5px}
+.bar .lb{width:78px;flex:none;color:var(--muted)}
+.bar .tk{flex:1;height:8px;border-radius:999px;background:var(--line);overflow:hidden}
+.bar .fl{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--teal),#34d399);
+  transform:scaleX(0);transform-origin:0 50%;transition:transform .8s var(--ease-out) .3s}
+.bar.weak .fl{background:linear-gradient(90deg,var(--rose),#fb923c)}
+.bar .vv{width:30px;text-align:right;font-weight:700;font-size:12px}
+
+/* ============ 点名 ============ */
+.rollbar{display:flex;align-items:center;gap:15px;background:#1e293b;border-radius:var(--radius);padding:16px 20px;color:#fff;margin-bottom:14px}
+html.dark .rollbar{background:#0f1830}
+.rollbar .avatar{width:52px;height:52px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:25px;flex:none}
+.rollbar .who b{font-size:16px}
+.rollbar .who span{display:block;font-size:12px;opacity:.8}
+.rollbar .sp{margin-left:auto;font-size:11.5px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);
+  padding:2px 11px;border-radius:999px}
+.roll-anim{animation:shake .4s var(--ease-out)}
+@keyframes shake{0%{transform:scale(1)}30%{transform:scale(1.09) rotate(-4deg)}65%{transform:scale(1.05) rotate(3deg)}100%{transform:scale(1)}}
+.picked{outline:2px solid var(--amber);outline-offset:1px;border-radius:6px}
+.roster{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:11px 0}
+.stu{border:1.5px solid var(--line);border-radius:6px;padding:7px 4px;text-align:center;font-size:12px;cursor:pointer;background:var(--card);
+  transition:border-color .12s ease,opacity .25s ease}
+.stu:hover{border-color:var(--accent)}
+.stu .fa{font-size:19px}
+.stu .nm{display:block;font-weight:600;margin-top:2px}
+.stu .st{font-size:10px;color:var(--muted)}
+.stu.done{opacity:.45;pointer-events:none}
+.stu.done .st{color:var(--green)}
+
+/* ============ 聊天（学生答疑） ============ */
+.chat{display:flex;flex-direction:column;gap:10px;min-height:280px}
+.msg{max-width:80%;padding:10px 14px;border-radius:9px;font-size:13.5px;animation:fadein .2s var(--ease-out)}
+.msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+.msg.bot{align-self:flex-start;background:var(--bg);border:1px solid var(--line);border-bottom-left-radius:3px}
+html.dark .msg.bot{background:#22304f}
+.quick{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.chat-tools{display:flex;gap:7px;flex:none;align-self:flex-start}
+.quick button{border:1px solid var(--line2);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 14px;font-size:12.5px;cursor:pointer;
+  transition:border-color .12s ease,color .12s ease}
+.quick button:hover{border-color:var(--accent);color:var(--accent)}
+.typing{align-self:flex-start;display:flex;gap:4px;padding:12px 16px;background:var(--bg);border:1px solid var(--line);border-radius:9px}
+html.dark .typing{background:#22304f}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.sec{border-left:3px solid;border-radius:5px;background:var(--card);padding:9px 13px;margin:8px 0;font-size:13px;
+  transition:background-color var(--theme-dur) var(--ease-swipe)}
+.sec b{display:block;margin-bottom:3px;font-size:12.5px}
+.s1{border-color:var(--accent)}.s2{border-color:var(--teal)}.s3{border-color:var(--amber)}.s4{border-color:var(--violet)}
+html.dark .s1{background:rgba(91,140,255,.08)}
+html.dark .s2{background:rgba(45,212,191,.07)}
+html.dark .s3{background:rgba(245,158,11,.07)}
+html.dark .s4{background:rgba(167,139,250,.08)}
+.maplist{margin:3px 0;padding-left:16px;font-size:12.5px;line-height:1.85}
+.maplist li::marker{color:var(--violet)}
+
+footer{text-align:center;color:var(--muted);font-size:12px;padding:8px 0 30px}
+
+/* ============ 三大图谱 ============ */
+.graphs-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.graph-col{border:1px solid var(--line);border-radius:var(--radius);padding:10px;background:var(--card);transition:background-color .4s var(--ease-swipe),border-color .4s var(--ease-swipe)}
+.graph-head{display:flex;align-items:baseline;gap:8px;padding:7px 10px;border-radius:6px;margin-bottom:9px;color:#fff}
+.graph-head b{font-size:13.5px}
+.graph-head span{font-size:11px;opacity:.85}
+.g-knowledge{background:#2563eb}.g-comp{background:#0d9488}.g-problem{background:#7c3aed}
+html.dark .g-knowledge{background:#1d4ed8}html.dark .g-comp{background:#0f766e}html.dark .g-problem{background:#6d28d9}
+.graph-branch{margin-bottom:10px}
+.gb-tag{display:block;font-size:11.5px;padding:3px 9px;border-radius:5px;margin-bottom:6px;font-weight:700}
+.t-blue{background:rgba(37,99,235,.1);color:var(--accent)}
+.t-teal{background:rgba(13,148,136,.1);color:var(--teal)}
+.t-violet{background:rgba(124,58,237,.1);color:var(--violet)}
+.gnodes{display:flex;flex-direction:column;gap:5px}
+.gnode{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:6px 10px;
+  font-size:12px;cursor:pointer;text-align:left;line-height:1.5;position:relative;
+  transition:border-color .12s var(--ease-out),background-color .12s var(--ease-out),transform 120ms var(--ease-out)}
+.gnode:hover{border-color:var(--accent);background:rgba(37,99,235,.05)}
+.gnode:active{transform:scale(.98)}
+.gnode .gdel{position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:50%;
+  border:1px solid var(--rose);background:var(--card);color:var(--rose);font-size:10px;line-height:1;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.gnode .gdel:hover{background:var(--rose);color:#fff}
+.gadd{border-style:dashed;color:var(--muted);justify-content:center;min-height:30px}
+.gadd:hover{color:var(--accent);border-color:var(--accent);background:rgba(37,99,235,.05)}
+
+/* 图谱详情弹层 */
+.modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(10,16,30,.55);display:flex;align-items:center;justify-content:center;padding:20px;
+  animation:fadein .18s var(--ease-out)}
+.modal-card{width:min(520px,100%);background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 50px rgba(2,8,23,.35);
+  padding:18px 20px;animation:fadein .2s var(--ease-out)}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.modal-header b{font-size:15px}
+.modal-body .gm-label{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.5px;margin:12px 0 4px;text-transform:uppercase}
+.modal-body .detail-text{font-size:13px;margin:0;line-height:1.7}
+.gm-map{display:flex;flex-direction:column;gap:6px}
+.gm-map .gm-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.gm-map .gm-dim{flex:none;width:86px;font-weight:700}
+.gm-map .gm-arrow{color:var(--muted)}
+
+.note{font-size:12px;color:var(--muted);background:var(--bg);border:1px dashed var(--line2);
+  border-radius:6px;padding:8px 13px;margin-top:13px}
+html.dark .note{background:#22304f}
+
+@media (hover:hover) and (pointer:fine){
+  .btn.primary:hover{box-shadow:0 3px 10px rgba(37,99,235,.28)}
+}
+@media (prefers-reduced-motion:reduce){
+  .panel.show,.msg,.qcard,.grade,.total,.picked,.roll-anim,.admin-hint{animation:none}
+  .bar .fl,.ring .fg{transition:none}
+  body,.card,nav,.sec,.qcard,input[type=text],textarea,.login-panel{transition:none}
+}
+@media (max-width:820px){.login-side h2{font-size:30px}.login-side p{font-size:14.5px}.login-side .pts{font-size:14px;line-height:2}}
+.code-strip{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.code-chip{display:flex;align-items:center;gap:8px;font-size:12.5px;background:var(--card);border:1px dashed var(--line);border-radius:8px;padding:7px 12px}
+.code-chip b{font-family:Consolas,Menlo,monospace;font-size:14px;letter-spacing:1px;color:var(--teal)}
+.code-chip span{color:var(--muted)}
+.ai-builder{margin:12px 0 14px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.ai-builder-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.ai-builder-head b{font-size:13px}.ai-builder-head span{display:block;color:var(--muted);font-size:11.5px;margin-top:3px}
+.knowledge-points{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.knowledge-points label{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:5px 8px;font-size:12px;cursor:pointer}
+.knowledge-points label:has(input:checked){border-color:var(--accent);color:var(--accent);background:rgba(37,99,235,.08)}
+.ai-builder-controls{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.ai-builder-controls select,.ai-builder-controls input{min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text)}
+.ai-builder-controls input{width:70px}.ai-status{font-size:12px;color:var(--muted);margin-top:7px;min-height:17px}
+.course-switch{max-width:220px;min-width:150px;height:32px;padding:4px 8px;border:1px solid rgba(255,255,255,.25);border-radius:6px;background:#22304f;color:#fff;font:inherit;font-size:12px}
+.course-current{max-width:220px;padding:4px 8px;border:1px solid rgba(255,255,255,.18);border-radius:6px;color:#e2e8f0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.student-controls,.qa-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}
+.student-controls input,.student-controls select,.qa-controls input,.qa-controls select{min-height:34px;padding:6px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--card);color:var(--ink);font:inherit;font-size:12.5px}
+.student-controls input[type=search],.qa-controls input[type=search]{flex:1;min-width:180px}
+.table-scroll{overflow:auto}.student-table{min-width:760px}
+.student-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:38px}
+.summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}
+.summary-stat{padding:12px 14px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.summary-stat span{display:block;color:var(--muted);font-size:12px}.summary-stat b{display:block;margin-top:2px;color:var(--ink);font-size:22px}
+.dialog{width:min(760px,calc(100% - 32px));max-height:80dvh;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.dialog::backdrop{background:rgba(5,10,20,.6);backdrop-filter:blur(2px)}
+.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dialog-head h2{margin:0;font-size:16px}.dialog-body{padding:16px 18px;overflow:auto;max-height:calc(80dvh - 62px)}
+.dialog-answer{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.75}
+.dialog-close{flex:none;width:32px;height:32px;border:1px solid var(--line2);border-radius:6px;background:var(--bg);color:var(--ink);font-size:17px;cursor:pointer}
+.detail-section{padding:12px 0;border-bottom:1px solid var(--line)}.detail-section:last-child{border-bottom:0}
+.detail-section h3{margin:0 0 8px;font-size:13px}.detail-section p{margin:4px 0;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.review-form{display:grid;gap:10px;margin-top:14px}.review-form input,.review-form textarea{width:100%;background:var(--card);color:var(--ink)}
+.pager{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.attention{color:var(--rose);font-weight:700}
+@media (max-width:600px){.summary-grid{grid-template-columns:1fr 1fr}.course-switch{max-width:145px;min-width:110px}.dialog-head,.dialog-body{padding-left:14px;padding-right:14px}}
+@media (max-width:860px){.wrap{grid-template-columns:1fr}nav{position:static}.rep{grid-template-columns:1fr}.roster{grid-template-columns:repeat(4,1fr)}
+  header.sh .demo-tag{display:none}.userchip .uname{display:none}.graphs-row{grid-template-columns:1fr}}
+@media (max-width:560px){.roster{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+
+<!-- ============ 登录页 ============ -->
+<div id="login">
+  <div class="login-side">
+    <canvas class="code-sea" id="codeSea"></canvas>
+    <h2>经管数智审计<br>智能学伴平台</h2>
+    <p>面向审计学教学与 CPA 备考的一体化智能助教：知识讲解、智能出题、答案批改、学情分析与课堂互动。</p>
+    <div class="pts">
+      📌 准则依据 + 实务案例 + 思政启迪<br>
+      🧠 知识图谱与掌握度追踪<br>
+      📝 题库组卷 · 规则评分 · rubric 批改<br>
+      🎯 课堂点名互动（零 token 消耗）
+    </div>
+  </div>
+  <div class="login-panel">
+    <button class="theme-btn" id="themeBtnLogin" title="切换深色 / 浅色模式">🌙</button>
+    <div class="lg">🎓</div>
+    <h1 id="authTitle">登录</h1>
+     <p class="sub" id="authSub">选择身份，输入账号进入平台</p>
+    <div class="admin-hint" id="adminHint">⚠️ 已识别管理员通道 —— 登录后将进入超级管理员工作台</div>
+    <div class="seg" id="roleSeg">
+      <button class="on" data-r="student">👨‍🎓 学生</button>
+      <button data-r="teacher">👩‍🏫 教师</button>
+    </div>
+
+    <div id="loginForm">
+      <div class="field">
+        <label id="nameLabel">姓名 / 学号</label>
+       <input type="text" id="nameInput" placeholder="输入账号，如 stu001 / teacher01" autocomplete="username">
+      </div>
+      <div class="field">
+        <label id="pwdLabel">密码</label>
+       <input type="password" id="pwdInput" placeholder="输入账号密码" autocomplete="current-password">
+      </div>
+      <div class="login-err" id="loginErr"></div>
+      <button class="btn primary" id="loginBtn" style="width:100%">进入平台</button>
+      <p class="login-note" id="registerEntry" style="display:none">还没有账号？<a href="javascript:void(0)" onclick="showRegister(true)">注册加入课堂</a></p>
+      <p class="login-note" id="loginNoteDefault">
+        开发环境提供演示账号；正式环境请使用管理员配置的账号。
+        忘记密码请联系管理员重置。
+      </p>
+    </div>
+
+    <div id="registerForm" style="display:none">
+      <div class="field">
+        <label for="regUsername">登录账号</label>
+        <input type="text" id="regUsername" placeholder="3-32 位字母/数字/._-，用于登录" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="regDisplayName">真实姓名</label>
+        <input type="text" id="regDisplayName" placeholder="教师审核时核对" autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="regStudentNumber">学号</label>
+        <input type="text" id="regStudentNumber" placeholder="用于教师查找学生" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="regPassword">密码</label>
+        <input type="password" id="regPassword" placeholder="至少 8 位" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="regPhone">手机号</label>
+        <input type="tel" id="regPhone" placeholder="11 位手机号，供任课教师核对" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="regClassCode">课堂代码</label>
+        <input type="text" id="regClassCode" placeholder="向任课教师索取，如 AUD101" autocomplete="off">
+      </div>
+      <div class="login-err" id="regErr"></div>
+      <button class="btn primary" id="registerBtn" style="width:100%">提交注册申请</button>
+      <p class="login-note">提交后需等待任课教师审核通过，方可登录。</p>
+      <p class="login-note"><a href="javascript:void(0)" onclick="showRegister(false)">← 返回登录</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 应用壳 ============ -->
+<header class="sh" id="appHeader" style="display:none">
+  <div class="logo"><span class="mark">🎓</span>审计智能学伴</div>
+  <span class="demo-tag">运行版 · 后端 API</span>
+  <span class="sp"></span>
+  <select class="course-switch" id="courseSwitch" aria-label="当前课程" style="display:none" onchange="changeActiveCourse(this.value)"></select>
+  <span class="course-current" id="courseCurrentLabel" style="display:none"></span>
+  <span class="userchip"><span id="chipFace">👨‍🎓</span><span class="uname" id="chipName"></span><span class="role" id="chipRole"></span></span>
+  <button class="logout-btn" id="logoutBtn">退出</button>
+  <button class="theme-btn" id="themeBtn" title="切换深色 / 浅色模式">🌙</button>
+</header>
+
+<div class="wrap" id="appWrap" style="display:none">
+<nav id="appNav"></nav>
+<main>
+
+<!-- 学习答疑（学生） -->
+<section class="panel" id="p1">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>💬 学习答疑与专题讲解</h2>
+      <p class="desc">基于知识库检索回答，讲解包含：结论 → 准则依据 → 实务案例 → 思政启示 → 思维导图</p></div>
+      <div class="chat-tools">
+        <button class="btn sm ghost" onclick="exportChatPng()" title="将当前聊天记录保存为图片">🖼️ 导出图片</button>
+        <button class="btn sm ghost" onclick="clearChat()" title="清空当前聊天记录">🧹 清空</button>
+      </div>
+    </div>
+    <div class="chat" id="chat1">
+      <div class="msg bot">你好，我是审计学智能助教。输入想学的知识点，或点击下方常见问题。</div>
+    </div>
+    <div class="quick">
+      <button onclick="ask('什么是审计证据？')">什么是审计证据？</button>
+      <button onclick="ask('系统讲解函证程序')">函证程序</button>
+      <button onclick="ask('注册会计师的职业道德')">职业道德</button>
+    </div>
+    <div class="btnrow">
+      <input type="text" id="qin" placeholder="输入问题…" style="flex:1" onkeydown="if(event.key==='Enter')askCustom()">
+      <button class="btn primary" onclick="askCustom()">发送</button>
+    </div>
+  </div>
+</section>
+
+<!-- 测验与批改（学生作答 / 教师批改中心） -->
+<section class="panel" id="p2">
+  <div class="card" id="p2Student">
+    <h2>📝 随堂测验 · 答题</h2>
+    <p class="desc" id="quizDesc">正在加载测验…</p>
+    <div id="quizAssignments"></div>
+    <div class="btnrow" style="margin-top:10px">
+      <label for="quizCourse" style="font-size:12px;color:var(--muted)">课程</label>
+      <select id="quizCourse" onchange="changeStudentCourse(this.value)" style="min-width:180px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text)"></select>
+    </div>
+    <div id="quizArea"></div>
+    <div class="btnrow">
+      <button class="btn primary" id="submitBtn" onclick="submitQuiz()">提交答案</button>
+      <button class="btn ghost" onclick="resetQuiz()">重做</button>
+      <span id="draftNote" style="font-size:11.5px;color:var(--muted);align-self:center"></span>
+    </div>
+    <div id="gradeArea"></div>
+  </div>
+  <div class="card" id="p2Teacher" style="display:none">
+    <h2>🧮 批改中心 · 教师视角</h2>
+    <p class="desc">提交答卷自动批改；演示答卷不会进入学生成绩或学情。</p>
+    <table>
+      <thead><tr><th>学生</th><th>测验</th><th>提交时间</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody id="subTable"><tr><td colspan="5" style="color:var(--muted)">生成演示答卷可预览评分效果，不写入学生记录</td></tr></tbody>
+    </table>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="genRandomSubmission(this)">🎲 生成演示答卷</button>
+      <button class="btn ghost" onclick="clearSubmissions()">清空</button>
+    </div>
+    <div id="teacherGradeArea"></div>
+    <div class="card" style="margin:14px 0 0;padding:14px">
+      <h3 style="font-size:13.5px;margin:0 0 8px">待复核队列</h3>
+      <table><thead><tr><th>学生</th><th>题目</th><th>当前得分</th><th>操作</th></tr></thead><tbody id="reviewQueueTable"><tr><td colspan="4" style="color:var(--muted)">正在加载…</td></tr></tbody></table>
+    </div>
+    <div class="card" style="margin:14px 0 0;padding:14px">
+      <h3 style="font-size:13.5px;margin:0 0 8px">已布置测验</h3>
+      <div class="table-scroll"><table><thead><tr><th>测验</th><th>对象</th><th>完成</th><th>待复核</th><th>截止时间</th><th>名单</th></tr></thead><tbody id="assignmentTable"><tr><td colspan="6" style="color:var(--muted)">正在加载…</td></tr></tbody></table></div>
+    </div>
+  </div>
+  <div class="note" id="p2note">题目、快照、客观题规则判分和 rubric 结果来自后端；未完成的主观题进入教师复核队列。</div>
+</section>
+
+<!-- 学情报告（学生/教师共用） -->
+<section class="panel" id="p3">
+  <div class="card">
+    <h2>📊 <span id="repTitle">学情报告与掌握度</span></h2>
+    <p class="desc" id="repDesc">完成测验后生成；掌握度随多次作答持续更新</p>
+    <div id="repEmpty" style="color:var(--muted);font-size:13px;padding:26px 0;text-align:center">
+      暂无有效测验数据。
+    </div>
+    <div id="repArea" style="display:none"></div>
+    <div id="historyArea" style="margin-top:14px"></div>
+  </div>
+</section>
+
+<!-- 课堂点名（教师） -->
+<section class="panel" id="p4">
+  <div class="card">
+    <h2>🎯 课堂点名互动</h2>
+    <p class="desc">随机抽取学生回答快问快答题；客观题规则判分，零 token 消耗</p>
+    <div class="rollbar">
+      <div class="avatar" id="rollFace">🙋</div>
+      <div class="who">
+        <b id="rollName">点击「开始点名」</b>
+        <span id="rollInfo">从未回答学生中随机抽取 · 未点过优先</span>
+      </div>
+      <span class="sp">本章 · 审计证据</span>
+    </div>
+      <div class="btnrow" style="margin:0 0 5px">
+        <button class="btn primary" onclick="rollCall()">🎲 开始点名</button>
+        <button class="btn ghost" onclick="addRosterStudent()">＋ 添加学生</button>
+        <button class="btn ghost" onclick="rollReset()">重置课堂</button>
+    </div>
+    <div class="roster" id="roster"></div>
+    <div id="rollQuiz" style="display:none">
+      <div class="qcard" id="rollQ"></div>
+      <div class="btnrow">
+        <button class="btn primary" onclick="rollAnswer(true)">✓ 答对了</button>
+        <button class="btn ghost" onclick="rollAnswer(false)">✗ 答错 / 不会</button>
+      </div>
+    </div>
+    <div id="rollFeedback"></div>
+  </div>
+</section>
+
+<!-- 教师答疑监管 -->
+<section class="panel" id="p5">
+  <div class="card">
+    <h2>📋 答疑记录 · 教学监管</h2>
+    <p class="desc">按学生或问题检索答疑记录；重点标记会保留。</p>
+    <div class="qa-controls">
+      <input id="qaSearch" type="search" placeholder="搜索学生、学号或问题" oninput="renderQaTable()">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)"><input id="qaImportantOnly" type="checkbox" onchange="renderQaTable()">仅重点</label>
+    </div>
+    <table>
+      <thead><tr><th style="width:150px">学生</th><th>问题</th><th style="width:120px">助教回答</th><th style="width:140px">操作</th></tr></thead>
+      <tbody id="qaTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 超级管理员 -->
+<section class="panel" id="p6">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>🛡️ 用户与权限管理</h2>
+       <p class="desc">超级管理员专属 · 可添加/删除用户并查看审计日志</p></div>
+       <button class="btn ghost sm" onclick="downloadBackup()">⬇ 导出备份</button>
+       <label class="btn ghost sm" for="backupFile">⬆ 恢复备份</label><input id="backupFile" type="file" accept="application/json,.json" hidden onchange="restoreBackup(this)">
+       <button class="btn primary sm" onclick="addUserRow()">＋ 添加用户</button>
+    </div>
+    <table>
+      <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>最近登录</th><th style="width:220px">操作</th></tr></thead>
+      <tbody id="userTable">
+        <tr><td>李老师</td><td><span class="pill info">教师</span></td><td><span class="pill ok">正常</span></td><td>今天 08:32</td><td><button class="btn sm ghost" onclick="toggleUser(this)">禁用</button> <button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+        <tr><td>张伟</td><td><span class="pill info">学生</span></td><td><span class="pill ok">正常</span></td><td>今天 09:15</td><td><button class="btn sm ghost" onclick="toggleUser(this)">禁用</button> <button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+        <tr><td>王芳</td><td><span class="pill info">学生</span></td><td><span class="pill bad">已禁用</span></td><td>3 天前</td><td><button class="btn sm ghost" onclick="toggleUser(this)">启用</button> <button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>📚 课程管理</h2><p class="desc">创建课程并分配负责教师；有学生、题目或测验记录的课程不能直接删除。</p></div>
+      <button class="btn primary sm" onclick="addCourseRow()">＋ 添加课程</button>
+    </div>
+    <table>
+      <thead><tr><th>课程</th><th>学期</th><th>负责教师</th><th style="width:100px">操作</th></tr></thead>
+      <tbody id="courseTable"><tr><td colspan="4" style="color:var(--muted)">正在加载课程…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>🗂️ 题库与知识库管理</h2>
+      <p class="desc">题目生命周期：draft → reviewing → published → retired</p></div>
+      <button class="btn primary sm" onclick="addQuestionRow()">＋ 添加题目</button>
+    </div>
+    <table>
+      <thead><tr><th>题目编号</th><th>知识点</th><th>难度</th><th>状态</th><th style="width:170px">操作</th></tr></thead>
+      <tbody id="qBankTable">
+        <tr><td>CPA-2025-AUD-0001</td><td>审计证据</td><td>易</td><td><span class="pill ok">published</span></td><td><button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+        <tr><td>CPA-2025-AUD-0002</td><td>函证控制</td><td>中</td><td><span class="pill mid">reviewing</span></td><td><button class="btn sm primary" onclick="this.textContent='published';this.className='btn sm ghost';this.closest('tr').querySelector('.pill').className='pill ok';this.onclick=null">审核发布</button> <button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+        <tr><td>CPA-2025-AUD-0003</td><td>职业道德</td><td>中</td><td><span class="pill bad">draft</span></td><td><button class="btn sm ghost" onclick="this.textContent='reviewing';this.className='btn sm primary';this.onclick=null">送审</button> <button class="btn sm ghost" onclick="delRow(this)">删除</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>📜 审计日志</h2>
+    <p class="desc">登录、题库发布、数据导出等敏感操作全量留痕</p>
+    <table>
+      <thead><tr><th style="width:140px">时间</th><th>操作者</th><th>动作</th><th>结果</th></tr></thead>
+       <tbody id="auditTable">
+        <tr><td>今天 09:20</td><td>张伟</td><td>提交测验「审计证据」</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>今天 08:32</td><td>李老师</td><td>登录系统</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>昨天 22:41</td><td>admin</td><td>轮换模型 API Key</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>昨天 18:03</td><td>王芳</td><td>登录系统</td><td><span class="pill bad">失败 ×3</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 三大图谱联动视图（学生/教师；教师可增删节点） -->
+<section class="panel" id="p7">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>🕸️ 审计学课程三大图谱联动视图</h2>
+      <p class="desc"><b>知识图谱</b>（学什么）→ <b>胜任力图谱</b>（能做什么）→ <b>问题图谱</b>（怎么练）· 点击节点看详情<span id="graphEditTip" style="display:none"> · 教师可 <b>＋添加 / ✕删除</b> 节点</span></p></div>
+      <button class="btn primary sm" id="graphEditBtn" style="display:none" onclick="toggleGraphEdit()">✏️ 编辑模式</button>
+    </div>
+    <div class="graphs-row" id="graphsRow">
+      <div class="graph-col">
+        <div class="graph-head g-knowledge"><b>知识图谱</b><span>学什么</span></div>
+        <div class="graph-branch"><b class="gb-tag t-blue">A · 专业知识维度</b>
+          <div class="gnodes" data-dim="knowledge" data-branch="A">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-teal">B · 数智技能维度</b>
+          <div class="gnodes" data-dim="knowledge" data-branch="B">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-violet">C · 综合职业能力维度</b>
+          <div class="gnodes" data-dim="knowledge" data-branch="C">
+          </div>
+        </div>
+      </div>
+      <div class="graph-col">
+        <div class="graph-head g-comp"><b>胜任力图谱</b><span>能做什么</span></div>
+        <div class="graph-branch"><b class="gb-tag t-blue">A · 能智查</b>
+          <div class="gnodes" data-dim="comp" data-branch="A">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-teal">B · 能慧说</b>
+          <div class="gnodes" data-dim="comp" data-branch="B">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-violet">C · 能睿写</b>
+          <div class="gnodes" data-dim="comp" data-branch="C">
+          </div>
+        </div>
+      </div>
+      <div class="graph-col">
+        <div class="graph-head g-problem"><b>问题图谱</b><span>怎么练</span></div>
+        <div class="graph-branch"><b class="gb-tag t-blue">A · 知识识记层</b>
+          <div class="gnodes" data-dim="problem" data-branch="A">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-teal">B · 应用分析层</b>
+          <div class="gnodes" data-dim="problem" data-branch="B">
+          </div>
+        </div>
+        <div class="graph-branch"><b class="gb-tag t-violet">C · 综合创新层</b>
+          <div class="gnodes" data-dim="problem" data-branch="C">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note" style="margin-top:14px">A/B/C 三个维度在三大图谱间一一映射（虚线对应）：学什么 → 能做什么 → 怎么练。正式版将支持教师自定义节点与映射关系。</div>
+  </div>
+</section>
+
+<!-- 题库管理（教师）：AI出题 + 审核 + 已发布题库 + 组卷 -->
+<section class="panel" id="p8">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>✨ AI 出题 & 审题</h2>
+      <p class="desc">勾选知识点 → 检索知识库生成 draft → 下方送审/通过/驳回 → 通过后进入已发布题库</p></div>
+      <span id="questionSummary" style="font-size:12px;color:var(--muted)">正在统计…</span>
+      <button class="btn primary sm" onclick="addQuestionRow()">＋ 手动添加</button>
+    </div>
+    <div class="ai-builder" id="aiBuilder">
+      <div class="ai-builder-head">
+        <div><b>按知识点生成</b><span>基于本地知识库资料出题，生成的题目为 draft 状态</span></div>
+        <button class="btn ghost sm" onclick="loadKnowledgePoints()">刷新知识点</button>
+      </div>
+      <div id="knowledgePointOptions" class="knowledge-points"><span style="color:var(--muted);font-size:12px">正在加载知识点…</span></div>
+      <div class="ai-builder-controls">
+        <select id="aiQuestionType"><option value="single_choice">单选题</option><option value="multi_choice">多选题</option><option value="judge">判断题</option><option value="fill">填空题</option><option value="short_answer">简答题</option><option value="case">案例题</option></select>
+        <select id="aiDifficulty"><option value="easy">简单</option><option value="medium" selected>中等</option><option value="hard">困难</option></select>
+        <input id="aiQuestionCount" type="number" min="1" max="10" value="3" aria-label="生成数量">
+        <button class="btn primary sm" onclick="generateAiQuestions()">生成题目草稿</button>
+      </div>
+      <div id="aiGenerateStatus" class="ai-status"></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;margin:14px 0 6px;flex-wrap:wrap">
+      <b style="font-size:13.5px">📋 题目列表</b>
+      <span style="flex:1"></span>
+      <input type="search" id="bankSearch" placeholder="搜索题干 / 知识点 / 来源" oninput="BANK_PAGE=1;renderBankTable()" style="max-width:260px;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+      <select id="bankStatusFilter" onchange="BANK_FILTER=this.value;BANK_PAGE=1;renderBankTable()" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+        <option value="all">全部状态</option><option value="draft">草稿</option><option value="reviewing">待审</option><option value="published">已发布</option><option value="retired">已下架</option>
+      </select>
+      <select id="bankKpFilter" onchange="BANK_PAGE=1;renderBankTable()" style="max-width:180px;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px"><option value="">全部知识点</option></select>
+    </div>
+    <table>
+      <thead><tr><th style="width:36px"><input type="checkbox" id="bankSelectAll" onchange="toggleSelectAll(this)" title="全选已发布"></th><th>题目编号</th><th>题干 / 知识点</th><th>难度</th><th>状态</th><th style="width:230px">操作</th></tr></thead>
+      <tbody id="reviewTable"><tr><td colspan="6" style="color:var(--muted)">正在加载…</td></tr></tbody>
+    </table>
+    <div id="bankPager" class="btnrow" style="justify-content:flex-end"></div>
+    <div id="quizBuilderBar" class="btnrow" style="display:none;margin-top:10px;padding:10px;background:var(--bg);border-radius:8px;border:1px dashed var(--line)">
+      <span style="font-size:12.5px;color:var(--teal)">已选 <b id="quizSelectCount">0</b> 道已发布题目</span>
+      <input id="quizTitle" placeholder="试卷名称（如：第4章测验）" style="flex:1;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+      <select id="quizTarget" aria-label="布置对象" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px">
+        <option value="all">全课程学生</option><option value="class">当前筛选班级</option><option value="selected">已选择学生</option>
+      </select>
+      <input id="quizDueAt" type="datetime-local" aria-label="截止时间" title="截止时间" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px">
+      <button class="btn primary sm" onclick="createQuizAssignment()">📋 组卷分发给学生</button>
+    </div>
+    <div class="note">审核流程：draft → 送审 → reviewing → 通过 → published（可组卷）/ 驳回 → draft。已发布题目勾选后可组卷分发。</div>
+  </div>
+</section>
+
+<!-- 资料库导入（教师） -->
+<section class="panel" id="p9">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>📥 资料库导入</h2>
+      <p class="desc">导入 PDF / DOCX / Markdown 资料；大批量资料请用 build_knowledge_index.py 建立本地索引</p></div>
+    </div>
+    <div class="import-row">
+      <input type="text" id="docName" placeholder="资料名称（如：审计学教材第4章）" style="flex:1">
+      <input type="file" id="docFile" accept=".pdf,.docx,.md" style="max-width:210px;font-size:12px">
+      <select id="docTarget" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px">
+        <option>audit_textbook · 教材讲义</option>
+        <option>audit_standards · 审计准则</option>
+        <option>audit_cases · 审计案例</option>
+        <option>cpa_question_bank · CPA题库</option>
+      </select>
+      <button class="btn primary" onclick="importDoc()">＋ 导入资料</button>
+    </div>
+    <div class="import-row" style="margin-top:8px">
+      <input type="search" id="docSearch" placeholder="搜索文件名或来源路径" oninput="DOC_PAGE=1;renderDocuments()" style="flex:1">
+      <select id="docKbFilter" onchange="DOC_PAGE=1;renderDocuments()" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px">
+        <option value="">全部知识库</option>
+        <option value="audit_textbook">教材讲义</option>
+        <option value="audit_standards">审计准则</option>
+        <option value="audit_cases">审计案例</option>
+        <option value="cpa_question_bank">CPA题库</option>
+      </select>
+      <select id="docPageSize" onchange="DOC_PAGE=1;renderDocuments()" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px"><option value="10">每页10</option><option value="20" selected>每页20</option><option value="50">每页50</option><option value="100">每页100</option></select>
+      <span id="docSummary" style="font-size:12px;color:var(--muted)">正在读取资料…</span>
+    </div>
+    <table style="margin-top:12px">
+      <thead><tr><th>资料名称</th><th>目标知识库</th><th>状态</th><th style="width:110px">操作</th></tr></thead>
+      <tbody id="docTable"><tr><td colspan="4" style="color:var(--muted)">正在加载…</td></tr></tbody>
+    </table>
+    <div id="docPager" class="btnrow" style="justify-content:flex-end"></div>
+    <div class="note">`审计学知识库/` 中的资料已建立本地 BM25 索引；状态为“已索引 · 可检索”的资料会被答疑直接检索，并返回原始文件路径作为出处。</div>
+  </div>
+</section>
+
+<!-- 课程思政地图（内嵌 D3 力导向三列布局） -->
+<section class="panel" id="p11">
+  <div class="card" style="padding:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px 10px">
+      <div><h2 style="margin:0">🧭 课程思政地图</h2>
+       <p class="desc" style="margin:2px 0 0">以课程思政为中心，知识、能力、思政三组节点沿周围放射展开</p></div>
+    </div>
+    <iframe id="szMapInline" src="课程思政地图.html" title="审计课程思政地图" onload="syncMapTheme()" style="width:100%;height:calc(100vh - 160px);min-height:620px;border:1px solid var(--line);border-radius:8px;background:var(--bg);display:block"></iframe>
+  </div>
+</section>
+
+<!-- 学生注册审核（教师 / 管理员） -->
+<section class="panel" id="p12">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>✅ 学生注册审核</h2>
+      <p class="desc">学生用课堂代码提交注册申请后在此审核；通过后自动加入课程，驳回会删除该申请（账号可重新注册）</p></div>
+      <button class="btn ghost sm" onclick="loadPendingRegistrations();loadClassCode()">↻ 刷新</button>
+    </div>
+    <div class="code-strip" id="classCodeBox"></div>
+    <table>
+      <thead><tr><th>姓名 / 学号 / 账号</th><th>手机号</th><th>申请课程</th><th>提交时间</th><th style="width:200px">操作</th></tr></thead>
+      <tbody id="pendingTable"><tr><td colspan="5" style="color:var(--muted)">正在加载…</td></tr></tbody>
+    </table>
+    <div class="note">同一账号、手机号与学号只能提交一次；共享网络注册受频率限制。</div>
+  </div>
+</section>
+
+<!-- 教师学生管理 -->
+<section class="panel" id="p13">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>👥 学生管理</h2><p class="desc">搜索学生并查看个人测验、错题和知识点掌握情况</p></div>
+      <button class="btn ghost sm" onclick="loadStudentDirectory()">↻ 刷新</button>
+    </div>
+    <div class="student-controls">
+      <input id="studentSearch" type="search" placeholder="姓名、学号或账号" oninput="scheduleStudentSearch()">
+      <select id="studentClassFilter" onchange="STUDENT_PAGE=1;loadStudentDirectory()"><option value="">全部班级</option></select>
+      <select id="studentStatusFilter" onchange="STUDENT_PAGE=1;loadStudentDirectory()">
+        <option value="all">全部学生</option><option value="needs_attention">需关注</option><option value="overdue">有逾期</option><option value="pending_review">待复核</option><option value="no_activity">暂无测验</option>
+      </select>
+    </div>
+    <div class="student-toolbar">
+      <span id="studentSummary" class="desc" style="margin:0;flex:1">正在加载学生…</span>
+      <button class="btn sm ghost" onclick="clearStudentSelection()">清空所选</button>
+    </div>
+    <div class="table-scroll">
+      <table class="student-table"><thead><tr><th style="width:36px"><input type="checkbox" id="studentPageSelect" aria-label="选择本页学生" onchange="toggleStudentPage(this)"></th><th>学生</th><th>班级</th><th>已交测验</th><th>最近成绩</th><th>薄弱点</th><th>待复核</th><th>逾期</th><th></th></tr></thead><tbody id="studentTable"><tr><td colspan="9" style="color:var(--muted)">正在加载…</td></tr></tbody></table>
+    </div>
+    <div class="pager" id="studentPager"></div>
+    <div id="studentSelectBar" class="btnrow" style="display:none;padding:10px;background:var(--bg);border:1px dashed var(--line);border-radius:6px">
+      <span style="font-size:12px;color:var(--muted)">已选 <b id="studentSelectCount">0</b> 名学生</span>
+      <button class="btn sm primary" onclick="useSelectedStudentsForAssignment()">用于布置测验</button>
+    </div>
+  </div>
+</section>
+
+<!-- 记录归档与历史清理 -->
+<section class="panel" id="p14">
+  <div class="card">
+    <div class="card-head-row"><div><h2>🗃️ 记录归档</h2><p class="desc">按课程导出包含名册、测验、答题、掌握度、答疑和课堂互动的 Excel 工作簿</p></div></div>
+    <div class="student-controls">
+      <label for="archiveCourse" style="font-size:12px;color:var(--muted)">导出范围</label>
+      <select id="archiveCourse"><option value="">全部可访问课程</option></select>
+      <button class="btn primary" onclick="createExcelSnapshot()">⬇ 生成并下载 Excel</button>
+    </div>
+    <div class="student-toolbar">
+      <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="excelScheduleEnabled" onchange="saveExcelSchedule()">定期自动保存</label>
+      <select id="excelScheduleInterval" aria-label="自动保存间隔" onchange="saveExcelSchedule()">
+        <option value="24">每天</option><option value="168">每周</option><option value="720">每 30 天</option>
+      </select>
+      <span id="excelScheduleStatus" class="desc" style="margin:0">自动保存已关闭</span>
+    </div>
+    <div class="table-scroll" style="margin-top:14px">
+      <table><thead><tr><th>快照时间</th><th>课程范围</th><th>文件大小</th><th>操作</th></tr></thead><tbody id="excelSnapshotTable"><tr><td colspan="4" style="color:var(--muted)">正在读取快照记录…</td></tr></tbody></table>
+    </div>
+  </div>
+  <div class="card">
+    <h2>🧹 清理历史记录</h2>
+    <p class="desc">仅处理截止日期前已完成的测验、答疑、课堂互动和 AI 用量；未完成测验、待复核记录及操作审计不会删除。清理前会自动生成 Excel 快照。</p>
+    <div class="student-controls">
+      <label for="cleanupPreset" style="font-size:12px;color:var(--muted)">快捷范围</label>
+      <select id="cleanupPreset" onchange="selectCleanupPreset()">
+        <option value="custom">自定义日期</option><option value="15">半个月前</option><option value="30">一个月前</option><option value="90">三个月前</option><option value="180">半年以前</option><option value="365">一年以前</option><option value="all">全部删除</option>
+      </select>
+      <label for="cleanupBefore" style="font-size:12px;color:var(--muted)">清理截止日（含）</label>
+      <input id="cleanupBefore" type="date" onchange="invalidateCleanupPreview()">
+      <select id="cleanupCourse" aria-label="清理课程范围" onchange="invalidateCleanupPreview()"><option value="">全部可访问课程</option></select>
+    </div>
+    <p id="cleanupRangeSummary" class="desc" style="margin:0 0 10px">自定义截止日期</p>
+    <div class="student-controls" id="cleanupCategories">
+      <label><input type="checkbox" value="quiz" checked onchange="invalidateCleanupPreview()">已完成测验与作答</label>
+      <label><input type="checkbox" value="chat" checked onchange="invalidateCleanupPreview()">答疑记录</label>
+      <label><input type="checkbox" value="classroom" checked onchange="invalidateCleanupPreview()">课堂互动记录</label>
+      <label><input type="checkbox" value="usage" checked onchange="invalidateCleanupPreview()">AI 用量记录</label>
+      <button class="btn ghost" onclick="previewHistoryCleanup()">预览清理范围</button>
+    </div>
+    <div id="cleanupPreview" class="note" style="display:none"></div>
+    <div id="cleanupAction" class="btnrow" style="display:none">
+      <button class="btn danger" onclick="confirmHistoryCleanup()">确认清理并保存快照</button>
+    </div>
+    <div id="cleanupStatus" class="ai-status" role="status"></div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<!-- 图谱节点详情弹层 -->
+<div class="modal-overlay" id="gmodal" style="display:none" onclick="if(event.target===this)closeGModal()">
+  <div class="modal-card">
+    <div class="modal-header"><b id="gmTitle">节点详情</b><button class="btn sm ghost" onclick="closeGModal()">✕ 关闭</button></div>
+    <div class="modal-body">
+      <p class="gm-label">所属图谱 / 维度</p>
+      <p id="gmDim" class="detail-text"></p>
+      <p class="gm-label">节点说明（演示数据）</p>
+      <p id="gmText" class="detail-text"></p>
+      <p class="gm-label">三图谱联动</p>
+      <div id="gmMap" class="gm-map"></div>
+      <div class="btnrow">
+        <button class="btn primary sm" onclick="gmAsk()">💬 向助教提问此节点</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog class="dialog" id="answerDialog" aria-labelledby="answerTitle">
+  <div class="dialog-head"><h2 id="answerTitle">助教完整回答</h2><button class="dialog-close" onclick="this.closest('dialog').close()" aria-label="关闭">×</button></div>
+  <div class="dialog-body"><p id="answerMeta" class="desc"></p><pre class="dialog-answer" id="answerContent"></pre></div>
+</dialog>
+<dialog class="dialog" id="studentDialog" aria-labelledby="studentDialogTitle">
+  <div class="dialog-head"><h2 id="studentDialogTitle">学生学情</h2><button class="dialog-close" onclick="this.closest('dialog').close()" aria-label="关闭">×</button></div>
+  <div class="dialog-body" id="studentDialogBody"></div>
+</dialog>
+<dialog class="dialog" id="assignmentDialog" aria-labelledby="assignmentDialogTitle">
+  <div class="dialog-head"><h2 id="assignmentDialogTitle">测验名单</h2><button class="dialog-close" onclick="this.closest('dialog').close()" aria-label="关闭">×</button></div>
+  <div class="dialog-body" id="assignmentDialogBody"></div>
+</dialog>
+<dialog class="dialog" id="reviewDialog" aria-labelledby="reviewDialogTitle">
+  <div class="dialog-head"><h2 id="reviewDialogTitle">主观题复核</h2><button class="dialog-close" onclick="this.closest('dialog').close()" aria-label="关闭">×</button></div>
+  <div class="dialog-body" id="reviewDialogBody"></div>
+</dialog>
+
+<footer id="appFooter" style="display:none">经管数智审计智能学伴 · 本地运行版</footer>
+
+<script src="vendor/three.min.js"></script>
+<script src="vendor/d3.min.js"></script>
+<script>
+/* ===== 代码海洋 2.0：Three.js 字符粒子海浪 =====
+   视觉：发光代码字符(<,/,>,{,},0,1)粒子附着在起伏平面上，Matrix 绿/霓虹蓝，叠加 Bloom 感
+   动效：正弦叠加伪 Perlin 噪声驱动海浪；波峰粒子脱离表面做重力飞溅，落回循环
+   降级：无 WebGL/加载失败 → 回退 2D canvas 版；prefers-reduced-motion → 静态帧
+   可重入：window.restartCodeSea() 供退出登录重建 DOM 后再次启动；重启前先回收上一轮 RAF/WebGL 资源 */
+let _seaStop=null;
+function startCodeSea(){
+  if(_seaStop){_seaStop();_seaStop=null;}
+  const cv=document.getElementById('codeSea');
+  if(!cv)return;
+  const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const alive=()=>cv.isConnected;   // 退出登录后 canvas 被移出 DOM，停帧避免空转 GPU
+
+  /* ---------- 回退：原 2D 字符雨（Three.js 不可用时） ---------- */
+  function fallback2D(){
+    const ctx=cv.getContext('2d');
+    const CHARS='01{}[]<>=;()+*/审计证据函证程序职业道德fn return const if else data'.split('');
+    let cols=[],W=0,H=0,dpr=Math.min(devicePixelRatio||1,2);
+    const COL_W=17,FONT=13;
+    function resize(){
+      const r=cv.parentElement.getBoundingClientRect();
+      W=r.width;H=r.height;
+      cv.width=W*dpr;cv.height=H*dpr;
+      cv.style.width=W+'px';cv.style.height=H+'px';
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.font=FONT+'px Consolas,Menlo,monospace';
+      const n=Math.ceil(W/COL_W);
+      cols=Array.from({length:n},(_,i)=>({
+        x:i*COL_W+4,y:Math.random()*H*.3+H*.55,speed:.25+Math.random()*.5,
+        amp:14+Math.random()*36,phase:Math.random()*Math.PI*2,
+        chars:Array.from({length:22},()=>CHARS[Math.random()*CHARS.length|0]),
+        alpha:.25+Math.random()*.5,tick:Math.random()*90|0
+      }));
+    }
+    resize();addEventListener('resize',resize);
+    let t=0,last=performance.now(),raf=null;
+    function draw(now){
+      if(!alive()){raf=null;return;}
+      const dt=Math.min((now-last)/1000,.05);last=now;t+=dt;
+      ctx.clearRect(0,0,W,H);
+      for(const c of cols){
+        const wave=Math.sin(t*.9+c.phase)*c.amp+Math.sin(t*.35+c.phase*1.7)*c.amp*.5;
+        const head=c.y+wave,len=c.chars.length;
+        for(let j=0;j<len;j++){
+          const yy=head-j*18;
+          if(yy<-20||yy>H+20)continue;
+          const fade=(1-j/len)*c.alpha;
+          ctx.fillStyle=j===0?'rgba(255,255,255,'+(fade*1.6)+')':'rgba(173,216,255,'+fade+')';
+          ctx.fillText(c.chars[j],c.x,yy);
+        }
+        c.y+=c.speed*.4;
+        if(c.y<H*.18)c.y=H*.62+Math.random()*H*.3;
+        if(++c.tick%14===0)c.chars[Math.random()*len|0]=CHARS[Math.random()*CHARS.length|0];
+      }
+      raf=requestAnimationFrame(draw);
+    }
+    raf=requestAnimationFrame(draw);
+    _seaStop=()=>{if(raf)cancelAnimationFrame(raf);raf=null;removeEventListener('resize',resize);};
+  }
+
+  /* ---------- 主实现：Three.js 粒子海浪 ---------- */
+  if(typeof THREE==='undefined'){fallback2D();return;}
+  try{
+    const renderer=new THREE.WebGLRenderer({canvas:cv,alpha:true,antialias:false,powerPreference:'low-power'});
+    renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.75));
+    const scene=new THREE.Scene();
+    const camera=new THREE.PerspectiveCamera(50,1,.1,100);
+    camera.position.set(0,4.2,8.5);
+    camera.lookAt(0,0,0);
+
+    /* 字符图集：把常用代码字符画进一张 canvas 纹理，粒子按 UV 取字 */
+    const GLYPHS='<>/{}[]()0123456789;=+*#$&@!?%';
+    const GW=16,GH=16,GCOLS=8;
+    const atlas=document.createElement('canvas');
+    atlas.width=GW*GCOLS;atlas.height=GH*Math.ceil(GLYPHS.length/GCOLS);
+    const ac=atlas.getContext('2d');
+    ac.font='bold 12px Consolas,Menlo,monospace';
+    ac.textAlign='center';ac.textBaseline='middle';
+    ac.fillStyle='#fff';
+    for(let i=0;i<GLYPHS.length;i++){
+      ac.fillText(GLYPHS[i],(i%GCOLS)*GW+GW/2,Math.floor(i/GCOLS)*GH+GH/2+.5);
+    }
+    const atlasTex=new THREE.CanvasTexture(atlas);
+    atlasTex.minFilter=THREE.LinearFilter;
+
+    const COLS=190,ROWS=130;                     // 超高密度：2.5 万字符
+    const N=COLS*ROWS;
+    const PLANE_W=26,PLANE_D=17;
+    const isDark=()=>document.documentElement.classList.contains('dark');
+    const NEON_A=new THREE.Color('#00ff41');     // 经典黑客帝国绿（主）
+    const NEON_B=new THREE.Color('#00b34a');     // 深一档的绿（辅，几乎不用蓝）
+
+    const geo=new THREE.BufferGeometry();
+    const pos=new Float32Array(N*3);
+    const seed=new Float32Array(N);
+    const uvOff=new Float32Array(N*2);
+    const shade=new Float32Array(N);
+    let p=0;
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      pos[p*3]= (c/(COLS-1)-.5)*PLANE_W + (Math.random()-.5)*.12;
+      pos[p*3+2]=(r/(ROWS-1)-.5)*PLANE_D+ (Math.random()-.5)*.12;
+      seed[p]=Math.random()*100;
+      uvOff[p*2]=Math.random()*GCOLS|0;
+      uvOff[p*2+1]=Math.random()*Math.ceil(GLYPHS.length/GCOLS)|0;
+      shade[p]=.45+Math.random()*.55;
+      p++;
+    }
+    geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('aSeed',new THREE.BufferAttribute(seed,1));
+    geo.setAttribute('aUvOff',new THREE.BufferAttribute(uvOff,2));
+    geo.setAttribute('aShade',new THREE.BufferAttribute(shade,1));
+
+    /* 顶点着色器：正弦叠加 hash 噪声 = 海浪；超过波峰阈值的粒子进入飞溅状态（自由落体） */
+    const material=new THREE.ShaderMaterial({
+      uniforms:{
+        uTime:{value:0},
+        uAtlas:{value:atlasTex},
+        uColorA:{value:NEON_A.clone()},
+        uColorB:{value:NEON_B.clone()},
+        uPixelRatio:{value:Math.min(devicePixelRatio||1,1.75)},
+        uOpacity:{value:isDark()?1:.55},
+        uSize:{value:7},
+      },
+      vertexShader:`
+        attribute float aSeed; attribute vec2 aUvOff; attribute float aShade;
+        uniform float uTime; uniform float uPixelRatio; uniform float uSize;
+        varying float vGlow; varying float vShade; varying vec2 vUvOff;
+        varying float vSplash;
+        // 简易 hash 噪声（伪 Perlin，够用且省算力）
+        float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+        float noise(vec2 p){
+          vec2 i=floor(p),f=fract(p);
+          vec2 u=f*f*(3.-2.*f);
+          return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),
+                     mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);
+        }
+        float waveH(vec2 xz,float t){
+          float h=0.;
+          h+=sin(xz.x*.55+t*1.1)*.55;
+          h+=sin(xz.y*.8 -t*0.9)*.45;
+          h+=sin((xz.x+xz.y)*.4+t*.7)*.35;
+          h+=noise(xz*.35+t*.15)*1.1;          // 柏林噪声低频涌动
+          h+=noise(xz*.9 -t*.3)*.25;           // 高频细浪
+          return h;
+        }
+        void main(){
+          vShade=aShade; vUvOff=aUvOff;
+          vec3 p=position;
+          float h=waveH(p.xz,uTime);
+          float crest=waveH(p.xz,uTime-0.12);   // 前一刻高度，判断是否在上升波峰
+          p.y=h;
+          // 飞溅收紧：更高阈值+更低概率+更低初速，只出现"贴浪小水花"，不再蹦出孤高的字符
+          float launch=step(1.75,h)*step(fract(aSeed*7.13),.07);
+          float lt=uTime+ aSeed*10.;
+          float lt2=fract(lt*.35)*1.1;          // 飞溅周期缩短
+          float vy0=.55+aSeed*.08;              // 初速大幅降低
+          float splashY=launch*(h*.1+vy0*lt2-3.4*lt2*lt2);
+          p.y+=launch>0.? max(splashY,0.) : 0.; // 只允许上抛段，落到液面即回收
+          vSplash=launch;
+          // 非飞溅粒子轻微贴面抖动，让海面活
+          p.y+= (1.-launch)*(hash(vec2(aSeed,floor(uTime*6.)))-.5)*.05;
+          vGlow=smoothstep(1.1,1.85,h)*.55 + launch*.5;  // 波峰微亮，不过曝
+          vec4 mv=modelViewMatrix*vec4(p,1.);
+          gl_Position=projectionMatrix*mv;
+          gl_PointSize=uSize*uPixelRatio*(1./-mv.z)*(3.2+aShade*.9);
+        }`,
+      fragmentShader:`
+        uniform sampler2D uAtlas; uniform vec3 uColorA; uniform vec3 uColorB; uniform float uOpacity;
+        varying float vGlow; varying float vShade; varying vec2 vUvOff; varying float vSplash;
+        void main(){
+          // 从字符图集取字
+          vec2 uv=(vUvOff+gl_PointCoord)/vec2(8.,5.);
+          float a=texture2D(uAtlas,uv).a;
+          if(a<.15)discard;
+          vec3 col=mix(uColorB,uColorA,vShade*.7);   // 色彩基本锁在绿色系内
+          col*= .6+vShade*.4;
+          col+= uColorA*vGlow*.6;                    // 波峰/飞溅柔光
+          float alpha=a*uOpacity*(.34+vShade*.6)*(0.5+vGlow*.7);
+          gl_FragColor=vec4(col,alpha);
+        }`,
+      transparent:true,
+      depthWrite:false,
+      blending:THREE.AdditiveBlending,
+    });
+    const points=new THREE.Points(geo,material);
+    scene.add(points);
+
+    // 第二层：更暗更远的背景粒子，制造纵深
+    const geo2=geo.clone();
+    const mat2=material.clone();
+    mat2.uniforms.uAtlas.value=atlasTex;
+    mat2.uniforms.uOpacity.value=isDark()?.35:.18;
+    mat2.uniforms.uSize.value=5;
+    const back=new THREE.Points(geo2,mat2);
+    back.position.set(2,.4,-6);
+    back.scale.set(1.25,1,1.2);
+    scene.add(back);
+
+    function resize(){
+      const r=cv.parentElement.getBoundingClientRect();
+      renderer.setSize(r.width,r.height,false);
+      camera.aspect=r.width/r.height;
+      camera.updateProjectionMatrix();
+    }
+    resize();addEventListener('resize',resize);
+
+    // 主题切换时同步颜色/透明度（瞬时生效，不做渐变）
+    function onThemeChange(e){
+      const dark=e.detail.dark;
+      material.uniforms.uOpacity.value=dark?1:.55;
+      mat2.uniforms.uOpacity.value=dark?.35:.18;
+    }
+    addEventListener('themechange',onThemeChange);
+
+    let last=performance.now(),raf=null;
+    function loop(now){
+      if(!alive()){raf=null;return;}
+      const dt=Math.min((now-last)/1000,.05);last=now;
+      material.uniforms.uTime.value+=dt;
+      mat2.uniforms.uTime.value+=dt*.8;
+      renderer.render(scene,camera);
+      raf=requestAnimationFrame(loop);
+    }
+    if(reduce){material.uniforms.uTime.value=3.2;renderer.render(scene,camera);}
+    else raf=requestAnimationFrame(loop);
+    window.__codeSeaThree=true;
+    _seaStop=()=>{
+      if(raf)cancelAnimationFrame(raf);raf=null;
+      removeEventListener('resize',resize);
+      removeEventListener('themechange',onThemeChange);
+      geo.dispose();geo2.dispose();
+      material.dispose();mat2.dispose();
+      atlasTex.dispose();renderer.dispose();
+    };
+  }catch(err){
+    fallback2D();
+  }
+}
+function restartCodeSea(){try{startCodeSea();}catch(e){}}
+startCodeSea();
+
+/* ===== 主题（记忆 + 跟随系统） ===== */
+const ICONS={light:'🌙',dark:'☀️'};
+function applyTheme(dark){
+  document.documentElement.classList.toggle('dark',dark);
+  document.querySelectorAll('.theme-btn').forEach(b=>b.textContent=ICONS[dark?'dark':'light']);
+  /* 通知代码海浪同步深浅色 */
+  dispatchEvent(new CustomEvent('themechange',{detail:{dark}}));
+  syncMapTheme();
+}
+function syncMapTheme(){
+  const frame=document.getElementById('szMapInline');
+  if(frame?.contentWindow)frame.contentWindow.postMessage({type:'audit-theme',dark:document.documentElement.classList.contains('dark')},location.origin);
+}
+applyTheme(localStorage.getItem('demo-theme')===null
+  ? matchMedia('(prefers-color-scheme: dark)').matches
+  : localStorage.getItem('demo-theme')==='dark');
+
+function switchTheme(e,btn){
+  const dark=!document.documentElement.classList.contains('dark');
+  const set=()=>{applyTheme(dark);localStorage.setItem('demo-theme',dark?'dark':'light');};
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduced||!document.startViewTransition){set();return;}
+  const x=e.clientX??innerWidth-60,y=e.clientY??32;
+  document.documentElement.style.setProperty('--tx',x+'px');
+  document.documentElement.style.setProperty('--ty',y+'px');
+  document.startViewTransition(set);
+}
+document.querySelectorAll('.theme-btn').forEach(b=>b.onclick=e=>switchTheme(e,b));
+
+/* ===== 角色 ===== */
+let ROLE='student';
+const ROLES={
+  student:{face:'👨‍🎓',label:'学生',roleCls:'',labelWord:'姓名 / 学号',home:'p1',
+    tabs:[['学','p1','💬','学习答疑'],['学','p2','📝','随堂测验'],['学','p7','🕸️','三大图谱'],['学','p11','🧭','课程思政地图'],['学','p3','📊','我的学情报告']]},
+  teacher:{face:'👩‍🏫',label:'教师',roleCls:'teacher',labelWord:'姓名 / 工号',home:'p13',
+    tabs:[['教','p13','👥','学生管理'],['教','p2','🧮','测验与批改'],['教','p5','📋','答疑记录'],['教','p8','🧾','题库审查'],['教','p9','📥','资料库导入'],['教','p12','✅','注册审核'],['教','p14','🗃️','数据归档'],['教','p11','🧭','课程思政地图'],['教','p4','🎯','课堂点名'],['教','p3','📊','班级学情']]},
+  admin:{face:'🛡️',label:'超级管理员',roleCls:'admin',labelWord:'管理员账号',home:'p6',
+    tabs:[['管','p6','🛡️','平台管理（用户/题库/日志）'],['管','p12','✅','注册审核'],['管','p14','🗃️','数据归档']]}
+};
+
+/* ===== 登录 ===== */
+const ADMIN_KEYWORDS=['super admin','supper admin','super  admin','supper  admin'];
+/* 登录面板 HTML 只保留静态那一份；退出登录时复用它，避免两处标记走样 */
+const LOGIN_PANEL_HTML=document.getElementById('login').innerHTML;
+let AUTH_MODE='login';
+function detectAdmin(v){
+  return ADMIN_KEYWORDS.includes(v.trim().toLowerCase().replace(/\s+/g,' '));
+}
+function showRegister(on){
+  if(on&&ROLE!=='student')on=false;
+  AUTH_MODE=on?'register':'login';
+  const loginForm=document.getElementById('loginForm'),regForm=document.getElementById('registerForm');
+  if(!loginForm||!regForm)return;
+  loginForm.style.display=on?'none':'block';
+  regForm.style.display=on?'block':'none';
+  document.getElementById('authTitle').textContent=on?'注册加入课堂':'登录';
+  document.getElementById('authSub').textContent=on
+     ?'填写真实姓名与学号，便于任课教师核对和查找'
+    :'选择身份，输入账号进入平台';
+  document.getElementById('adminHint').classList.toggle('show',!on&&detectAdmin(document.getElementById('nameInput')?.value||''));
+  document.getElementById('loginNoteDefault').style.display=on?'none':'block';
+  document.getElementById('registerEntry').style.display=(!on&&ROLE==='student')?'block':'none';
+  const err=document.getElementById(on?'regErr':'loginErr');if(err)err.textContent='';
+}
+function bindLoginPanel(){
+  document.querySelectorAll('.theme-btn').forEach(b=>b.onclick=ev=>switchTheme(ev,b));
+  document.querySelectorAll('#roleSeg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#roleSeg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');ROLE=b.dataset.r;
+    document.getElementById('nameLabel').textContent=ROLES[ROLE].labelWord;
+    if(AUTH_MODE==='register'&&ROLE!=='student')showRegister(false);
+    document.getElementById('registerEntry').style.display=(AUTH_MODE==='login'&&ROLE==='student')?'block':'none';
+  });
+  document.getElementById('nameInput').addEventListener('input',e=>{
+    document.getElementById('adminHint').classList.toggle('show',AUTH_MODE==='login'&&detectAdmin(e.target.value));
+  });
+  document.getElementById('loginBtn').onclick=doLogin;
+  document.getElementById('registerBtn').onclick=doRegister;
+  document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('pwdInput').focus();});
+  document.getElementById('pwdInput').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+  document.getElementById('regClassCode').addEventListener('keydown',e=>{if(e.key==='Enter')doRegister();});
+  document.getElementById('registerEntry').style.display=ROLE==='student'?'block':'none';
+}
+bindLoginPanel();
+
+function enterApp(user){
+  const cfg=ROLES[user.role];
+  document.getElementById('chipFace').textContent=cfg.face;
+  document.getElementById('chipName').textContent=user.name;
+  const chipRole=document.getElementById('chipRole');
+  chipRole.textContent=cfg.label;chipRole.className='role '+cfg.roleCls;
+  /* 教/管视角切换测验模块外观 */
+  document.getElementById('p2Student').style.display=(user.role==='student')?'block':'none';
+  document.getElementById('p2Teacher').style.display=(user.role==='student')?'none':'block';
+   if(user.role!=='student'){document.getElementById('repTitle').textContent='班级学情总览';document.getElementById('repDesc').textContent='全体学生的掌握度汇总（来自后端）';}
+  document.getElementById('p4').querySelector('h2').textContent='🎯 课堂点名互动';
+  /* 三大图谱编辑入口：教师/管理员可见 */
+  document.getElementById('graphEditBtn').style.display=(user.role==='student')?'none':'inline-block';
+  const nav=document.getElementById('appNav');
+  nav.innerHTML=cfg.tabs.map(([tag,id,ic,label],i)=>
+    `<button data-p="${id}" class="${i===0?'active':''}">${ic} ${label}</button>`).join('')
+     +`<div class="tip">身份：${cfg.label}<br>页面数据来自后端 API</div>`;
+  nav.querySelectorAll('button').forEach(b=>b.onclick=()=>switchPanel(b));
+  const login=document.getElementById('login');
+  if(login){login.style.opacity='0';login.style.transition='opacity .18s ease';setTimeout(()=>login.remove(),180);}
+  document.getElementById('appHeader').style.display='flex';
+  document.getElementById('appWrap').style.display='grid';
+  document.getElementById('appFooter').style.display='block';
+  switchPanel(nav.querySelector(`button[data-p="${cfg.home}"]`));
+}
+function switchPanel(btn){
+  document.querySelectorAll('#appNav button').forEach(x=>x.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('show'));
+  document.getElementById(btn.dataset.p).classList.add('show');
+  window.scrollTo({top:0,behavior:'smooth'});
+  if(btn.dataset.p==='p13')loadStudentDirectory();
+  if(btn.dataset.p==='p14')loadExcelArchiveTools();
+}
+/* Reload after server-side revocation so cached role data and pending requests are discarded. */
+document.getElementById('logoutBtn').onclick=async event=>{
+  const button=event.currentTarget;button.disabled=true;
+  try{await apiRequest('/api/auth/logout',{method:'POST'});location.reload();}
+  catch(error){button.disabled=false;alert(error.message||'退出失败，请重试');}
+};
+/* ===== P1 学生答疑 ===== */
+function askCustom(){const v=document.getElementById('qin').value.trim();if(!v)return;document.getElementById('qin').value='';ask(v);}
+function aShort(s){return s.length>18?s.slice(0,18)+'…':s}
+
+/* ===== 答疑监管数据 ===== */
+const QA_LOG=[];
+function renderQaTable(){
+  const table=document.getElementById('qaTable');if(!table)return;
+  const query=(document.getElementById('qaSearch')?.value||'').trim().toLowerCase();
+  const importantOnly=document.getElementById('qaImportantOnly')?.checked;
+  const rows=QA_LOG.map((item,index)=>({item,index})).filter(({item})=>{
+    const answer=item.response?.answer_markdown||item.a||'';
+    return(!importantOnly||item.key)&&(!query||`${item.stu} ${item.student_number||''} ${item.q} ${answer}`.toLowerCase().includes(query));
+  });
+  table.innerHTML=rows.map(({item:x,index:i})=>`<tr>
+    <td>${x.user_id?`<button class="btn sm ghost" onclick="openStudentDetail('${escapeHtml(x.user_id)}','${escapeHtml(x.course_id||'')}')">${escapeHtml(x.stu)}</button>`:escapeHtml(x.stu)}<br><small style="color:var(--muted)">${escapeHtml(x.student_number||x.course_name||'')}</small></td>
+    <td>${escapeHtml(x.q)}</td><td><button class="btn sm ghost" onclick="showQaAnswer(${i})">查看回答</button></td>
+    <td><button class="btn sm ghost" onclick="markKey(this,${i})">${x.key?'★ 已标记':'标记重点'}</button></td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">没有匹配的答疑记录</td></tr>';
+}
+function showQaAnswer(i){
+  const item=QA_LOG[i];if(!item)return;
+  const answer=item.response?.answer_markdown||item.a||'暂无回答内容';
+  document.getElementById('answerMeta').textContent=[item.stu,item.student_number,item.course_name,item.created_at?formatShortDate(item.created_at):''].filter(Boolean).join(' · ');
+  document.getElementById('answerContent').textContent=answer;
+  document.getElementById('answerDialog').showModal();
+}
+async function markKey(btn,i){
+  const item=QA_LOG[i];if(!item)return;
+  const important=!item.key;
+  if(!item.id){alert('该记录缺少唯一编号，请刷新记录后重试');return;}
+  btn.disabled=true;
+  try{
+    await apiRequest(`/api/chat/monitor/${encodeURIComponent(item.id)}/important`,{method:'PATCH',body:JSON.stringify({important})});
+    item.key=important;renderQaTable();
+  }catch(error){alert(error.message||'重点标记失败');btn.disabled=false;}
+}
+
+let STUDENT_PAGE=1,STUDENT_ROWS=[],STUDENT_SEARCH_TIMER=null,STUDENT_REQUEST=0,SELECTED_STUDENT_IDS=new Set();
+function scheduleStudentSearch(){clearTimeout(STUDENT_SEARCH_TIMER);STUDENT_SEARCH_TIMER=setTimeout(()=>{STUDENT_PAGE=1;loadStudentDirectory();},220);}
+async function loadStudentDirectory(){
+  const table=document.getElementById('studentTable');if(!table||!LIVE_COURSE_ID)return;
+  const requestId=++STUDENT_REQUEST;
+  table.innerHTML='<tr><td colspan="9" style="color:var(--muted)">正在读取学生名单…</td></tr>';
+  const params=new URLSearchParams({page:String(STUDENT_PAGE),page_size:'20',q:document.getElementById('studentSearch')?.value||'',status:document.getElementById('studentStatusFilter')?.value||'all'});
+  const className=document.getElementById('studentClassFilter')?.value||'';if(className)params.set('class_name',className);
+  try{
+    const data=await apiRequest(`/api/courses/${encodeURIComponent(LIVE_COURSE_ID)}/students?${params}`);
+    if(requestId!==STUDENT_REQUEST)return;
+    STUDENT_ROWS=data.students||[];
+    const classSelect=document.getElementById('studentClassFilter');
+    const current=classSelect.value;
+    if(classSelect){classSelect.innerHTML='<option value="">全部班级</option>'+data.classes.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');classSelect.value=data.classes.includes(current)?current:'';}
+    document.getElementById('studentSummary').textContent=`${document.getElementById('courseSwitch')?.selectedOptions[0]?.textContent||'当前课程'} · 共 ${data.total} 名学生`;
+    table.innerHTML=STUDENT_ROWS.map(student=>`<tr>
+      <td><input type="checkbox" aria-label="选择${escapeHtml(student.display_name)}" ${SELECTED_STUDENT_IDS.has(student.id)?'checked':''} onchange="toggleStudentSelection('${escapeHtml(student.id)}',this.checked)"></td>
+      <td><b>${escapeHtml(student.display_name)}</b>${student.attention?' <span class="attention">需关注</span>':''}<br><small style="color:var(--muted)">${escapeHtml(student.student_number||'未填写学号')} · ${escapeHtml(student.username)}</small></td>
+      <td>${escapeHtml(student.class_name||'未分班')}</td><td>${student.completed_quizzes}</td>
+      <td>${student.latest_score===null?'暂无':`${student.latest_score}%`}</td><td>${student.mastery_count?student.weak_count:'—'}</td>
+      <td>${student.pending_reviews}</td><td>${student.overdue_assignments}</td><td><button class="btn sm ghost" onclick="openStudentDetail('${escapeHtml(student.id)}','${escapeHtml(LIVE_COURSE_ID)}')">查看学情</button></td></tr>`).join('')||'<tr><td colspan="9" style="color:var(--muted)">该筛选条件下没有学生</td></tr>';
+    const pages=Math.max(1,Math.ceil(data.total/data.page_size));
+    document.getElementById('studentPager').innerHTML=`<button class="btn sm ghost" ${STUDENT_PAGE<=1?'disabled':''} onclick="STUDENT_PAGE--;loadStudentDirectory()">上一页</button><span>第 ${STUDENT_PAGE} / ${pages} 页</span><button class="btn sm ghost" ${STUDENT_PAGE>=pages?'disabled':''} onclick="STUDENT_PAGE++;loadStudentDirectory()">下一页</button>`;
+    const selectPage=document.getElementById('studentPageSelect');if(selectPage)selectPage.checked=STUDENT_ROWS.length>0&&STUDENT_ROWS.every(student=>SELECTED_STUDENT_IDS.has(student.id));
+    updateStudentSelection();
+  }catch(error){if(requestId===STUDENT_REQUEST)showApiError(table,error.message||'学生名单加载失败');}
+}
+function toggleStudentSelection(id,selected){selected?SELECTED_STUDENT_IDS.add(id):SELECTED_STUDENT_IDS.delete(id);updateStudentSelection();}
+function toggleStudentPage(input){STUDENT_ROWS.forEach(student=>input.checked?SELECTED_STUDENT_IDS.add(student.id):SELECTED_STUDENT_IDS.delete(student.id));loadStudentDirectory();}
+function clearStudentSelection(){SELECTED_STUDENT_IDS.clear();loadStudentDirectory();}
+function updateStudentSelection(){
+  const bar=document.getElementById('studentSelectBar');if(!bar)return;
+  bar.style.display=SELECTED_STUDENT_IDS.size?'flex':'none';
+  document.getElementById('studentSelectCount').textContent=SELECTED_STUDENT_IDS.size;
+  const target=document.getElementById('quizTarget');if(target){const option=target.querySelector('option[value="selected"]');if(option)option.textContent=`已选择学生（${SELECTED_STUDENT_IDS.size}）`;}
+}
+function useSelectedStudentsForAssignment(){
+  if(!SELECTED_STUDENT_IDS.size)return;
+  document.getElementById('quizTarget').value='selected';
+  const button=document.querySelector('#appNav button[data-p="p8"]');if(button)switchPanel(button);
+}
+function formatShortDate(value){
+  if(!value)return '—';
+  const date=new Date(value);return Number.isNaN(date.valueOf())?String(value):new Intl.DateTimeFormat('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(date);
+}
+function statusText(status){return({graded:'已完成',needs_review:'待复核',grading:'批改中',ongoing:'待作答',record_deleted:'学生记录已删除'})[status]||status||'—';}
+function renderHistoryRows(rows){
+  return rows.map(item=>`<tr><td>${escapeHtml(formatShortDate(item.submitted_at||item.started_at))}</td><td>${escapeHtml(item.title||'随堂测验')}</td><td>${item.total===null?'—':`${item.total} / ${item.max_total}`}</td><td>${escapeHtml(statusText(item.status))}</td><td>${item.wrong_questions?.length||0}</td></tr>`).join('');
+}
+async function openStudentDetail(studentId,courseId=LIVE_COURSE_ID){
+  try{
+    const data=await apiRequest(`/api/progress/students/${encodeURIComponent(studentId)}?course_id=${encodeURIComponent(courseId)}`);
+    const student=data.student,history=data.history||[],latest=history.find(item=>item.status==='graded');
+    document.getElementById('studentDialogTitle').textContent=`${student.display_name} · 学情`;
+    const mastery=data.mastery||[];
+    const bars=mastery.slice(0,8).map(row=>`<div class="bar ${row.attempts>=2&&row.mastery<60?'weak':''}"><span class="lb">${escapeHtml(row.knowledge_point)}</span><div class="tk"><div class="fl" style="transform:scaleX(${Math.max(0,Math.min(100,Number(row.mastery)))/100})"></div></div><span class="vv">${Math.round(row.mastery)}%</span></div>`).join('');
+    const answers=history.flatMap(item=>(item.wrong_questions||[]).map(wrong=>`<details class="detail-section"><summary>${escapeHtml(wrong.stem)} · ${wrong.score}/${wrong.max_score}</summary><p>学生答案：${escapeHtml(typeof wrong.submitted_answer==='string'?wrong.submitted_answer:JSON.stringify(wrong.submitted_answer??'未作答'))}</p><p>${escapeHtml(wrong.why)}</p><p>知识点：${escapeHtml((wrong.knowledge_points||[]).join('、')||'未标注')}</p></details>`)).join('');
+    const classroom=(data.classroom||[]).map(row=>`<tr><td>${escapeHtml(formatShortDate(row.created_at))}</td><td>${escapeHtml(row.question)}</td><td><span class="pill ${row.correct?'ok':'bad'}">${row.correct?'答对':'未答对'}</span></td></tr>`).join('');
+    const chats=(data.chats||[]).map(row=>`<details class="detail-section"><summary>${escapeHtml(formatShortDate(row.created_at))} · ${escapeHtml(row.question)} ${row.important?'· 重点':''}</summary><p>${escapeHtml(row.answer||'暂无回答内容')}</p></details>`).join('');
+    document.getElementById('studentDialogBody').innerHTML=`
+      <div class="detail-section"><p>${escapeHtml(student.student_number||'未填写学号')} · ${escapeHtml(student.username)} · ${escapeHtml(student.class_name||'未分班')}</p>
+        <div class="summary-grid"><div class="summary-stat"><span>最近成绩</span><b>${latest&&latest.max_total?Math.round(latest.total/latest.max_total*100)+'%':'暂无'}</b></div><div class="summary-stat"><span>已掌握知识点</span><b>${data.mastered_count}</b></div><div class="summary-stat"><span>待加强知识点</span><b>${data.weak_count}</b></div></div>
+        ${data.insufficient_count?`<p class="desc">${data.insufficient_count} 个知识点作答少于 2 次，样本不足，暂不归类。</p>`:''}
+        <button class="btn sm primary" onclick="SELECTED_STUDENT_IDS.add('${escapeHtml(student.id)}');updateStudentSelection();document.getElementById('studentDialog').close();useSelectedStudentsForAssignment()">给该学生布置测验</button></div>
+      <div class="detail-section"><h3>知识点掌握度</h3>${bars||'<p class="desc">暂无足够作答数据</p>'}</div>
+      <div class="detail-section"><h3>近期测验</h3><div class="table-scroll"><table><thead><tr><th>时间</th><th>测验</th><th>得分</th><th>状态</th><th>错题</th></tr></thead><tbody>${renderHistoryRows(history.slice(0,8))||'<tr><td colspan="5">暂无已提交测验</td></tr>'}</tbody></table></div></div>
+      <div class="detail-section"><h3>课堂互动记录</h3><div class="table-scroll"><table><thead><tr><th>时间</th><th>问题</th><th>结果</th></tr></thead><tbody>${classroom||'<tr><td colspan="3">暂无课堂互动记录</td></tr>'}</tbody></table></div></div>
+      <div class="detail-section"><h3>答疑记录</h3>${chats||'<p class="desc">暂无答疑记录</p>'}</div>
+      <div class="detail-section"><h3>待加强作答</h3>${answers||'<p class="desc">暂无已确认的错题</p>'}</div>`;
+    document.getElementById('studentDialog').showModal();
+    requestAnimationFrame(()=>document.querySelectorAll('#studentDialog .fl').forEach(fill=>fill.style.transform=`scaleX(${fill.closest('.bar').querySelector('.vv').textContent.replace('%','')/100})`));
+  }catch(error){alert(error.message||'学生学情加载失败');}
+}
+
+/* ===== P2 测验 ===== */
+let studentAns={},CURRENT={role:'student',name:'我'};
+function showGrades(ga,g,who,recorded=true){
+  const pct=Math.round(g.total/g.max*100);
+  const dash=176*(1-pct/100);
+  ga.innerHTML=g.rows+`
+    <div class="total">
+      <div class="num">${g.total}<span style="font-size:14px;color:var(--muted)"> / ${g.max}</span></div>
+      <div class="ring"><svg width="64" height="64"><circle class="bgc" cx="32" cy="32" r="28"/><circle class="fg" cx="32" cy="32" r="28" id="${ga.id}Fg" style="stroke-dashoffset:176"/></svg><div class="pct">${pct}%</div></div>
+      <div style="font-size:12.5px">${who}<br><span style="color:var(--muted)">${recorded?'批改完成 · 已计入掌握度':'演示结果 · 未计入学生学情'}</span></div>
+    </div>`;
+  requestAnimationFrame(()=>{const el=document.getElementById(ga.id+'Fg');if(el)el.style.strokeDashoffset=dash;});
+  buildReport();
+  const goReport=document.createElement('div');
+  goReport.className='btnrow';goReport.style.animation='fadein .2s var(--ease-out)';
+  goReport.innerHTML=`<button class="btn primary" onclick="switchToReport()">📊 查看学情</button>`;
+  ga.appendChild(goReport);
+}
+function switchToReport(){
+  const btn=document.querySelector('#appNav button[data-p="p3"]');
+  if(btn)switchPanel(btn);
+}
+function resetQuiz(){renderQuiz();}
+
+/* 教师批改中心 */
+async function genRandomSubmission(button){
+  const table=document.getElementById('subTable');
+  const area=document.getElementById('teacherGradeArea');
+  if(button)button.disabled=true;
+  table.innerHTML='<tr><td colspan="5" style="color:var(--muted)">正在生成演示答卷…</td></tr>';
+  try{
+    const data=await apiRequest('/api/quiz/demo-random',{method:'POST',body:JSON.stringify({course_id:await ensureCourseId(),counts:{single:1,multi:1,short:1}})});
+    const result=data.result;const questions=data.questions||[];
+    let total=0,max=0;
+    const rows=result.per_question.map(item=>{
+      const q=questions.find(question=>question.id===item.question_id);
+      const score=Number(item.score),maxScore=Number(item.max_score);total+=score;max+=maxScore;
+      const cls=score===maxScore?'g-ok':score?'g-half':'g-bad';
+      const points=(item.per_point||[]).map(point=>`${escapeHtml(point.point)} ${point.matched?'✓':'✗'}`).join('；');
+      return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(q?.stem||'')} · ${escapeHtml(item.method)}</span><span>${score} / ${maxScore} 分</span></div><div class="why">✦ 批改意见：${escapeHtml(item.why)}</div>${points?`<div class="why">✦ 评分要点：${points}</div>`:''}</div>`;
+    }).join('');
+    table.innerHTML='';
+    table.insertAdjacentHTML('afterbegin',`<tr><td>演示数据</td><td>随机组卷 · ${questions.length} 题</td><td>刚刚</td><td><span class="pill ${total/max>=0.8?'ok':total/max>=0.5?'mid':'bad'}">${total} / ${max} 分</span></td><td><span class="pill ${result.status==='graded'?'ok':'mid'}">${result.status==='graded'?'批改完成':'演示待复核'}</span></td></tr>`);
+    showGrades(area,{rows,total,max},`演示答卷 · ${result.graded_by==='llm'?'模型 rubric 批改':'规则批改'}`,false);
+  }catch(error){
+    table.innerHTML='<tr><td colspan="5" style="color:var(--muted)">生成失败</td></tr>';
+    showApiError('teacherGradeArea',error.message||'随机答卷失败');
+  }finally{if(button)button.disabled=false;}
+}
+function clearSubmissions(){document.getElementById('subTable').innerHTML='<tr><td colspan="5" style="color:var(--muted)">生成演示答卷可预览评分效果，不写入学生记录</td></tr>';document.getElementById('teacherGradeArea').innerHTML='';}
+async function loadReviewQueue(){
+  const table=document.getElementById('reviewQueueTable');if(!table)return;
+  try{
+    PENDING_REVIEWS=await apiRequest('/api/grading/queue/details');
+    table.innerHTML=PENDING_REVIEWS.length?PENDING_REVIEWS.map((item,index)=>`<tr><td>${escapeHtml(item.student.display_name)}<br><small>${escapeHtml(item.student.student_number||'未填写学号')}</small></td><td>${escapeHtml(item.question.stem)}</td><td>${item.score} / ${item.max_score}</td><td><button class="btn sm primary" onclick="openReview(${index})">查看并复核</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--muted)">暂无待复核答案</td></tr>';
+  }catch(error){showApiError('reviewQueueTable',error.message||'复核队列加载失败');}
+}
+let PENDING_REVIEWS=[];
+function openReview(index){
+  const item=PENDING_REVIEWS[index];if(!item)return;
+  const pointRows=(item.per_point||[]).map(point=>`<li>${escapeHtml(point.point)} · ${point.matched?'命中':'未命中'} · ${point.score}/${point.max_score}</li>`).join('');
+  document.getElementById('reviewDialogBody').innerHTML=`<div class="detail-section"><h3>${escapeHtml(item.student.display_name)} · ${escapeHtml(item.student.student_number||'未填写学号')}</h3><p>${escapeHtml(item.question.stem)}</p></div>
+    <div class="detail-section"><h3>学生答案</h3><p>${escapeHtml(typeof item.answer==='string'?item.answer:JSON.stringify(item.answer??'未作答'))}</p></div>
+    <div class="detail-section"><h3>参考答案与评分要点</h3><p>${escapeHtml(item.question.reference_answer||'暂无参考答案')}</p><ul>${pointRows||'<li>暂无逐点评分结果</li>'}</ul></div>
+    <p class="desc">系统初评分：${item.score} / ${item.max_score} · ${escapeHtml(item.why)}</p>
+    <form class="review-form" onsubmit="submitReview(event,${index})"><label>复核得分<input id="reviewScore" type="number" min="0" max="${item.max_score}" step="0.5" value="${item.score}" required></label><label>复核理由<textarea id="reviewReason" required maxlength="1000" placeholder="说明评分依据"></textarea></label><button class="btn primary" type="submit">提交复核</button></form>`;
+  document.getElementById('reviewDialog').showModal();
+}
+async function submitReview(event,index){
+  event.preventDefault();const item=PENDING_REVIEWS[index];if(!item)return;
+  const score=Number(document.getElementById('reviewScore').value),reason=document.getElementById('reviewReason').value.trim();
+  if(!Number.isFinite(score)||score<0||score>item.max_score||!reason)return;
+  try{
+    await apiRequest(`/api/grading/${encodeURIComponent(item.result_id)}/review`,{method:'POST',body:JSON.stringify({question_id:item.question.id,score,reason})});
+    document.getElementById('reviewDialog').close();await Promise.all([loadReviewQueue(),loadTeacherAssignments(),loadStudentDirectory()]);
+  }catch(error){alert(error.message||'复核失败');}
+}
+
+/* ===== P4 点名 ===== */
+let STUDENTS=[],rollState={idx:-1,done:[]};
+function renderRoster(){
+  document.getElementById('roster').innerHTML=STUDENTS.length?STUDENTS.map((s,i)=>`
+    <div class="stu ${rollState.done.includes(i)?'done':''}" id="stu-${i}" onclick="pickOne(${i})">
+      <span class="fa">${s.f}</span><span class="nm">${escapeHtml(s.n)}</span>
+      <span class="st">${rollState.done.includes(i)?'已完成 ✓':'未点名'}</span>
+    </div>`).join(''):'<span style="color:var(--muted);font-size:12px">暂无课程名单</span>';
+}
+async function loadCourseRoster(){
+  try{
+    const courseId=await ensureCourseId();
+    const data=await apiRequest(`/api/courses/${encodeURIComponent(courseId)}/students?page_size=1000`);
+    STUDENTS=(data.students||[]).map((student,index)=>({n:student.display_name,f:index%3===1?'👩‍🎓':'🧑‍🎓',id:student.id}));
+    rollState={idx:-1,done:[]};renderRoster();
+    document.getElementById('rollInfo').textContent=`当前课程 · ${STUDENTS.length} 名学生 · 未点过优先`;
+  }catch(error){
+    if(document.getElementById('roster'))document.getElementById('roster').innerHTML='<span style="color:var(--muted);font-size:12px">暂无可用课程名单</span>';
+  }
+}
+async function addRosterStudent(){
+  try{
+    const courseId=await ensureCourseId();const available=await apiRequest(`/api/courses/${encodeURIComponent(courseId)}/available-students`);
+    const username=prompt('输入学生账号：');if(!username?.trim())return;
+    const student=(available.students||[]).find(item=>item.username===username.trim());
+    if(!student)throw new Error('找不到可加入该课程的学生账号');
+    const className=prompt('班级名称：','审计一班')||'';
+    await apiRequest(`/api/courses/${encodeURIComponent(courseId)}/students/${student.id}`,{method:'POST',body:JSON.stringify({class_name:className})});
+    await loadCourseRoster();
+  }catch(error){alert(error.message||'添加学生失败');}
+}
+function rollReset(){rollState={idx:-1,done:[]};document.getElementById('rollQuiz').style.display='none';document.getElementById('rollFeedback').innerHTML='';document.getElementById('rollName').textContent='点击「开始点名」';document.getElementById('rollInfo').textContent='从未回答学生中随机抽取 · 未点过优先';renderRoster();}
+function pickOne(i){if(!rollState.done.includes(i))startRoll(i);}
+function rollCall(){
+  if(!STUDENTS.length){document.getElementById('rollInfo').textContent='当前课程暂无学生名单';return;}
+  const remain=STUDENTS.map((_,i)=>i).filter(i=>!rollState.done.includes(i));
+  if(!remain.length){document.getElementById('rollInfo').textContent='全班已回答完毕 🎉 可点击「重置课堂」再来一轮';return;}
+  startRoll(remain[Math.floor(Math.random()*remain.length)]);
+}
+async function startRoll(i){
+  rollState.idx=i;
+  const s=STUDENTS[i];
+  const stu=document.getElementById('stu-'+i);
+  if(stu){stu.classList.remove('roll-anim');void stu.offsetWidth;stu.classList.add('roll-anim');}
+  document.getElementById('rollFace').textContent=s.f;
+  document.getElementById('rollName').textContent=s.n+'，请你来回答';
+  document.getElementById('rollInfo').textContent='正在从题库抽取快问快答题…';
+  document.getElementById('rollQ').innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
+  document.getElementById('rollQuiz').style.display='block';
+  document.querySelectorAll('#rollQuiz .btn').forEach(button=>button.disabled=false);
+  document.getElementById('rollFeedback').innerHTML='';
+  renderRoster();
+  document.querySelectorAll('.stu').forEach(el=>el.classList.remove('picked'));
+  document.getElementById('stu-'+i)?.classList.add('picked');
+  try{
+    rollState.q=await apiRequest(`/api/bank/quick-question?course_id=${encodeURIComponent(await ensureCourseId())}`);
+  }catch(error){
+    rollState.q=null;
+    document.getElementById('rollQ').innerHTML=`<div class="stem" style="color:var(--amber)">抽题失败：${escapeHtml(error.message||'题库暂无可用题目')}</div>`;
+    document.getElementById('rollInfo').textContent='本章 · 快问快答';
+    return;
+  }
+  const answerHint=rollState.q.answer_display?`参考答案：${escapeHtml(rollState.q.answer_display)}`:'请口头作答';
+  document.getElementById('rollQ').innerHTML=`<div class="qh"><span class="tag">课堂点名题</span><span class="score">${escapeHtml(s.n)} 正在回答…</span></div><div class="stem">${escapeHtml(rollState.q.stem)}</div><div style="font-size:12.5px;color:var(--muted)">${answerHint}　（教师判定后计入课堂记录）</div>`;
+  document.getElementById('rollInfo').textContent='本章 · 快问快答（题目来自题库）';
+}
+async function rollAnswer(ok){
+  const i=rollState.idx;if(i<0)return;
+  const s=STUDENTS[i];
+  const buttons=document.querySelectorAll('#rollQuiz .btn');buttons.forEach(button=>button.disabled=true);
+  try{
+    await apiRequest(`/api/courses/${encodeURIComponent(await ensureCourseId())}/roll-call`,{method:'POST',body:JSON.stringify({student_id:s.id,question:rollState.q?.stem||'课堂口头问答',correct:ok})});
+  }catch(error){buttons.forEach(button=>button.disabled=false);alert(error.message||'课堂记录保存失败');return;}
+  rollState.done.push(i);
+  document.getElementById('rollFeedback').innerHTML=`
+    <div class="grade ${ok?'g-ok':'g-bad'}">
+      <div class="gh"><span>${escapeHtml(s.n)}</span><span>${ok?'回答正确 · 已记录':'未答出 · 已记录'}</span></div>
+      <div class="why">✦ 参考答案：${escapeHtml(rollState.q?.answer_display||'—')}　✦ 规则判分 · token 消耗 0</div>
+    </div>`;
+  document.getElementById('rollQuiz').style.display='none';
+  renderRoster();
+  document.getElementById('rollInfo').textContent=`已完成 ${rollState.done.length} / ${STUDENTS.length} 人`;
+}
+
+/* ===== P7 三大图谱：节点说明与映射来自图谱 API ===== */
+const GRAPH_META={
+  knowledge:{name:'知识图谱（学什么）',desc:'课程要求掌握的知识点集合，按专业知识/数智技能/综合职业能力三个维度组织。'},
+  comp:{name:'胜任力图谱（能做什么）',desc:'完成审计业务所需的能力项，与知识图谱节点一一对应：学到的知识转化为可执行的能力。'},
+  problem:{name:'问题图谱（怎么练）',desc:'按识记→应用→综合创新三层递进的训练问题集，每个问题都映射到具体知识与能力节点。'}
+};
+const BRANCH_NAMES={A:'A 维度（专业/能智查/识记层）',B:'B 维度（数智技能/能慧说/应用分析层）',C:'C 维度（综合职业能力/能睿写/综合创新层）'};
+const GRAPH_NODES={};
+function openGNode(btn){
+  const wrap=btn.closest('.gnodes');
+  const dim=wrap.dataset.dim,branch=wrap.dataset.branch;
+  const name=btn.dataset.n;
+  const node=GRAPH_NODES[btn.dataset.id];
+  document.getElementById('gmTitle').textContent=name;
+  document.getElementById('gmDim').textContent=GRAPH_META[dim].name+' · '+BRANCH_NAMES[branch];
+  document.getElementById('gmText').textContent=node?.description||'该节点的详细说明由课程教师在编辑模式中配置。';
+  const rows=[];
+  const mk=(tag,cls,txt)=>`<div class="gm-row"><span class="gm-dim ${escapeHtml(cls)}">${escapeHtml(tag)}</span><span>${escapeHtml(txt)}</span></div>`;
+  const source=node?.map_from?GRAPH_NODES[node.map_from]:null;
+  if(dim==='knowledge'){
+    rows.push(mk('知识图谱','pill info',name));
+    const target=Object.values(GRAPH_NODES).find(item=>item.map_from===btn.dataset.id);
+    rows.push(mk('问题图谱','pill mid',target?.name||'→ 尚无问题节点映射'));
+  }else if(dim==='problem'){
+    rows.push(mk('知识图谱','pill info',source?.name||'← 尚无知识节点映射'));
+    rows.push(mk('问题图谱','pill mid',name));
+  }else{
+    rows.push(mk('胜任力图谱','pill mid',name));
+  }
+  document.getElementById('gmMap').innerHTML=rows.join('');
+  window.__gmCurrent={dim,name};
+  document.getElementById('gmodal').style.display='flex';
+}
+function closeGModal(){document.getElementById('gmodal').style.display='none';}
+function gmAsk(){
+  closeGModal();
+  const btn=document.querySelector('#appNav button[data-p="p1"]');
+  if(btn)switchPanel(btn);
+  const q=window.__gmCurrent?window.__gmCurrent.name:'审计证据';
+  const inp=document.getElementById('qin');inp.value='请讲解「'+q+'」';askCustom();
+}
+document.querySelectorAll('.gnode').forEach(b=>b.onclick=()=>openGNode(b));
+
+/* ===== 图谱编辑模式（教师专属）：添加/删除节点，localStorage 持久化 ===== */
+let graphEdit=false;
+/* ===== 管理端：用户/题目 增删 ===== */
+function delRow(btn){
+  if(!confirm('确定删除该行吗？'))return;
+  btn.closest('tr').remove();
+}
+/* ===== 聊天工具：导出图片 / 清空记录 ===== */
+const WELCOME_HTML='<div class="msg bot">你好，我是审计学智能助教。输入想学的知识点，或点击下方常见问题。</div>';
+function exportChatPng(){
+  const chat=document.getElementById('chat1');
+  if(!chat.children.length){alert('暂无聊天内容');return;}
+  const dark=document.documentElement.classList.contains('dark');
+  const W=720, pad=24;
+  /* 克隆聊天区并内联关键样式（foreignObject 无法读取外部 class） */
+  const clone=chat.cloneNode(true);
+  clone.style.cssText=`display:flex;flex-direction:column;gap:10px;padding:${pad}px;background:${dark?'#0e1526':'#f8fafc'};width:100%;box-sizing:border-box`;
+  clone.querySelectorAll('.msg').forEach(el=>{
+    const user=el.classList.contains('user');
+    el.style.cssText=`max-width:80%;padding:11px 15px;border-radius:10px;font-size:13.5px;line-height:1.7;
+      align-self:${user?'flex-end':'flex-start'};white-space:pre-wrap;
+      background:${user?'#2563eb':dark?'#22304f':'#eef2ff'};
+      color:${user?'#fff':dark?'#e2e8f0':'#1e293b'};
+      border:1px solid ${user?'transparent':dark?'#2c3b58':'#dbe6ff'};
+      border-bottom-${user?'right':'left'}-radius:3px;font-family:'Segoe UI','Microsoft YaHei',sans-serif`;
+    el.querySelectorAll('.sec').forEach((s,i)=>{
+      const cols=['#2563eb','#0d9488','#d97706','#7c3aed'];
+      s.style.cssText=`border-left:3px solid ${cols[i%4]};border-radius:5px;padding:8px 12px;margin:8px 0;font-size:12.5px;
+        background:${dark?'rgba(255,255,255,.04)':'#fff'}`;
+      s.querySelectorAll('b').forEach(b=>b.style.cssText='display:block;margin-bottom:3px;font-size:12.5px');
+    });
+    el.querySelectorAll('.maplist').forEach(ul=>{
+      ul.style.cssText='margin:3px 0;padding-left:16px;font-size:12px;line-height:1.8';
+      ul.querySelectorAll('li').forEach(li=>li.style.cssText='list-style:disc');
+    });
+    const src=el.querySelector('.src');if(src)src.style.cssText='display:block;margin-top:7px;font-size:11px;color:#0d9488';
+  });
+  /* 先量高度：塞进临时容器渲染一次 */
+  const measurer=document.createElement('div');
+  measurer.style.cssText=`position:fixed;left:-9999px;top:0;width:${W}px;visibility:hidden`;
+  measurer.appendChild(clone);
+  document.body.appendChild(measurer);
+  const H=Math.ceil(measurer.getBoundingClientRect().height)+pad*2;
+  document.body.removeChild(measurer);
+
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
+    <foreignObject width="100%" height="100%">
+      <div xmlns="http://www.w3.org/1999/xhtml">${clone.outerHTML}</div>
+    </foreignObject>
+  </svg>`;
+  const img=new Image();
+  const url='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+  img.onload=()=>{
+    const cvs=document.createElement('canvas');
+    cvs.width=W*2;cvs.height=H*2;   /* 2x 输出更清晰 */
+    const cx=cvs.getContext('2d');
+    cx.scale(2,2);
+    cx.drawImage(img,0,0,W,H);
+    const a=document.createElement('a');
+    a.download=`审计学伴聊天记录_${new Date().toISOString().slice(0,16).replace(/[:T]/g,'-')}.png`;
+    a.href=cvs.toDataURL('image/png');
+    a.click();
+  };
+  img.onerror=()=>alert('导出失败：浏览器不支持该渲染方式，请截图保存');
+  img.src=url;
+}
+
+/* ===== P8 题库审查 / P9 资料库导入 ===== */
+
+/* ===== 运行版 API 连接层 ===== */
+async function apiRequest(path,options={}){
+  const headers=new Headers(options.headers||{});
+  if(options.body&&!(options.body instanceof FormData)&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');
+  const openedFromFile=window.location.protocol==='file:';
+  const requestPath=openedFromFile?`http://127.0.0.1:8000${path}`:path;
+  let response;
+  try{
+    response=await fetch(requestPath,{...options,headers,credentials:openedFromFile?'include':'same-origin'});
+  }catch(error){
+    throw new Error(openedFromFile?'当前页面是直接打开的文件，请访问 http://127.0.0.1:8000/ 后再登录':'无法连接后端服务，请确认 http://127.0.0.1:8000/ 正在运行');
+  }
+  const text=await response.text();
+  let data=null;
+  try{data=text?JSON.parse(text):null;}catch(e){data={message:text};}
+  if(!response.ok){const error=new Error(data?.message||`请求失败（${response.status}）`);error.status=response.status;throw error;}
+  return data;
+}
+function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
+function textHtml(value){return escapeHtml(value).replace(/\n/g,'<br>');}
+function showApiError(target,message){
+  const el=typeof target==='string'?document.getElementById(target):target;
+  if(el)el.innerHTML=`<div class="grade g-bad"><div class="why">${escapeHtml(message)}</div></div>`;
+}
+
+async function doRegister(){
+  const username=document.getElementById('regUsername').value.trim();
+  const displayName=document.getElementById('regDisplayName').value.trim();
+  const studentNumber=document.getElementById('regStudentNumber').value.trim();
+  const password=document.getElementById('regPassword').value;
+  const phone=document.getElementById('regPhone').value.trim();
+  const classCode=document.getElementById('regClassCode').value.trim();
+  const err=document.getElementById('regErr');
+  const button=document.getElementById('registerBtn');
+  if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username)){err.textContent='账号需为 3-32 位字母、数字、下划线、点或横线';return;}
+  if(!displayName){err.textContent='请输入真实姓名';return;}
+  if(!studentNumber){err.textContent='请输入学号';return;}
+  if(password.length<8){err.textContent='密码至少 8 位';return;}
+  if(!/^1[3-9]\d{9}$/.test(phone)){err.textContent='请输入有效的 11 位手机号';return;}
+  if(!classCode){err.textContent='请输入任课教师提供的课堂代码';return;}
+  err.textContent='正在提交…';button.disabled=true;
+  try{
+    const data=await apiRequest('/api/auth/register',{method:'POST',body:JSON.stringify({
+       username,display_name:displayName,student_number:studentNumber,password,phone,class_code:classCode
+    })});
+    document.getElementById('registerForm').innerHTML=
+      `<div class="grade g-ok" style="margin-top:8px"><div class="gh"><span>注册申请已提交</span><span>等待教师审核</span></div>
+       <div class="why">${escapeHtml(data.message||'请等待任课教师审核')}</div></div>
+       <p class="login-note" style="margin-top:10px"><a href="javascript:void(0)" onclick="location.reload()">← 返回登录</a></p>`;
+  }catch(error){err.textContent=error.message||'注册失败，请稍后重试';}
+  finally{button.disabled=false;}
+}
+
+async function doLogin(){
+  const name=document.getElementById('nameInput').value.trim();
+  const pwd=document.getElementById('pwdInput').value;
+  const err=document.getElementById('loginErr');
+  const button=document.getElementById('loginBtn');
+  if(!name){err.textContent='请输入账号';document.getElementById('nameInput').focus();return;}
+  if(!pwd){err.textContent='请输入密码';document.getElementById('pwdInput').focus();return;}
+  /* 身份必须与账号实际角色一致，由后端二次校验 */
+  const role=detectAdmin(name)?'admin':ROLE;
+  err.textContent='正在登录…';button.disabled=true;
+  try{
+    const data=await apiRequest('/api/auth/login',{method:'POST',body:JSON.stringify({username:name,password:pwd,role:role})});
+    const user=data.user;
+    CURRENT={id:user.id,username:user.username,role:user.role,name:user.display_name};
+    enterApp({role:user.role,name:user.display_name});
+    if(user.role==='student')renderQuiz();
+  }catch(error){err.textContent=error.message||'登录失败，请检查账号和密码';}
+  finally{button.disabled=false;}
+}
+
+async function bootAuth(){
+  try{
+    const user=await apiRequest('/api/auth/me');
+    CURRENT={id:user.id,username:user.username,role:user.role,name:user.display_name};
+    document.getElementById('login')?.remove();
+    enterApp({role:user.role,name:user.display_name});
+    if(user.role==='student')renderQuiz();
+  }catch(error){}
+}
+
+async function ask(q){
+  q=String(q||'').trim();if(!q)return;
+  const chat=document.getElementById('chat1');
+  const typingId='typing-'+Date.now();
+  chat.insertAdjacentHTML('beforeend',`<div class="msg user">${escapeHtml(q)}</div><div class="typing" id="${typingId}"><i></i><i></i><i></i></div>`);
+  chat.scrollTop=chat.scrollHeight;
+  try{
+    const data=await apiRequest('/api/chat/ask',{method:'POST',body:JSON.stringify({question:q,course_id:LIVE_COURSE_ID})});
+    document.getElementById(typingId)?.remove();
+    const labels={conclusion:'📌 知识点结论',standards:'📖 准则来源',case:'💼 案例示例',ideology:'🌱 思政启示'};
+    const sections=Object.entries(data.sections||{}).filter(([,value])=>String(value||'').trim());
+    let html='<div class="msg bot">';
+    if(sections.length){
+      sections.forEach(([key,value],i)=>{
+        html+=`<div class="sec s${(i%4)+1}"><b>${labels[key]||escapeHtml(key)}</b>${textHtml(value)}</div>`;
+      });
+    }else html+=`<div>${textHtml(data.answer_markdown||'暂无回答')}</div>`;
+    if(data.mind_map?.length)html+=`<b>🧠 思维导图</b><ul class="maplist">${data.mind_map.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>`;
+    if(data.sources?.length)html+=`<span class="src" style="display:block;margin-top:7px;font-size:11.5px;color:var(--teal)">📎 来源：${data.sources.map(x=>escapeHtml(x.name)).join('、')}</span>`;
+    const degradedNotice={no_knowledge:'未检索到相关课程资料，以下回答来自模型通用知识。',model_unconfigured:'模型接口尚未配置，请管理员检查服务端 URL、Key 和模型名。',model_unavailable:'模型服务暂不可用，本次未生成有效回答。',model_http_error:'模型服务返回错误，请检查接口地址、Key、模型名及中转站参数。',model_rate_limited:'模型中转站达到速率或并发上限，请稍后重试或联系管理员调整通道容量。',model_busy:'模型服务当前排队已满，本次没有消耗模型配额，请稍后重试。',model_cooling_down:'模型通道刚发生故障，正在短暂冷却，本次没有消耗模型配额。请稍后重试。',model_timeout:'模型服务请求超时，本次未生成回答。',model_transport_error:'模型服务连接中断，本次未生成回答。',model_invalid_response:'模型服务已响应，但返回格式无法识别；可根据服务端日志中的请求 ID 排查。',model_empty_response:'模型服务已响应，但没有返回可用文本内容。'}[data.degraded_reason];
+    if(degradedNotice)html+=`<span style="display:block;margin-top:7px;font-size:11.5px;color:var(--amber)">${escapeHtml(degradedNotice)}</span>`;
+    html+='</div>';chat.insertAdjacentHTML('beforeend',html);
+    QA_LOG.unshift({stu:CURRENT.name||'我',q:aShort(q),a:degradedNotice||'知识库检索 + 模型回答',n:QA_LOG.length+1});
+    if(ROLES[CURRENT.role]&&CURRENT.role!=='student')renderQaTable();
+  }catch(error){document.getElementById(typingId)?.remove();chat.insertAdjacentHTML('beforeend',`<div class="msg bot">${escapeHtml(error.message||'答疑请求失败')}</div>`);}
+  chat.scrollTop=chat.scrollHeight;
+}
+
+async function clearChat(){
+  try{await apiRequest('/api/chat/history',{method:'DELETE'});}catch(error){showApiError('chat1',error.message);return;}
+  document.getElementById('chat1').innerHTML=WELCOME_HTML;
+}
+
+let LIVE_QUIZ=null;
+let LIVE_QUESTIONS=[];
+let LIVE_COURSE_ID=null;
+let LIVE_ASSIGNMENTS=[];
+async function ensureCourseId(){
+  if(LIVE_COURSE_ID)return LIVE_COURSE_ID;
+  const courses=await apiRequest('/api/courses');
+  if(!courses.length)throw new Error('当前账号没有可用课程');
+  LIVE_COURSE_ID=courses[0].id;
+  return LIVE_COURSE_ID;
+}
+function assignmentStatus(status){
+  return status==='ongoing'?'待作答':status==='grading'?'批改中':status==='needs_review'?'待复核':status==='graded'?'已完成':status;
+}
+function renderAssignments(assignments,resumable=[]){
+  const area=document.getElementById('quizAssignments');if(!area)return;
+  if(!assignments.length&&!resumable.length){area.innerHTML='';return;}
+  const assignedRows=assignments.map(item=>{
+    const active=item.status==='ongoing';
+    const overdue=active&&item.due_at&&new Date(item.due_at)<new Date();
+    return `<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(item.title||'随堂测验')}</div><div class="qa-meta">${item.question_count} 题 · ${overdue?'已逾期':assignmentStatus(item.status)}${item.due_at?` · 截止 ${escapeHtml(formatShortDate(item.due_at))}`:''}</div></div><div class="qa-action">${active?`<button class="btn primary sm" onclick="openAssignedQuiz('${escapeHtml(item.id)}')">开始作答</button>`:`<span class="pill ${item.status==='graded'?'ok':'mid'}">${assignmentStatus(item.status)}</span>`}</div></div>`;
+  }).join('');
+  const resumableRows=resumable.map(item=>`<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(item.title||'练习测验')} · 已保存作答</div><div class="qa-meta">${item.question_count} 题 · 可恢复</div></div><div class="qa-action"><button class="btn primary sm" onclick="openAssignedQuiz('${escapeHtml(item.id)}')">恢复作答</button></div></div>`).join('');
+  area.innerHTML=`<div class="quiz-assignment-list"><div class="quiz-assignment-head"><b>待完成测验</b><span>选择一份继续</span></div>${assignedRows}${resumableRows}</div>`;
+}
+function renderQuizSession(data){
+  const area=document.getElementById('quizArea');
+  LIVE_QUIZ=data;LIVE_QUESTIONS=data.questions||[];studentAns={...(data.saved_answers||{}),...(data.draft_answers||{})};
+  const max=LIVE_QUESTIONS.reduce((sum,item)=>sum+Number(item.score||0),0);
+  const desc=document.getElementById('quizDesc');
+  if(desc)desc.textContent=`「${data.title||'练习测验'}」 · ${LIVE_QUESTIONS.length} 题 · 满分 ${max} 分`;
+  area.innerHTML=LIVE_QUESTIONS.map(q=>`
+    <div class="qcard">
+      <div class="qh"><span class="tag">${q.type==='single_choice'?'单选题':q.type==='multi_choice'?'多选题':q.type==='judge'?'判断题':q.type==='fill'?'填空题':q.type==='case'?'案例题':'简答题'}</span><span class="score">${q.score} 分</span></div>
+      <div class="stem">${escapeHtml(q.stem)}</div>
+      ${q.type==='fill'?`<input id="ta-${q.id}" type="text" placeholder="输入你的答案…" oninput="scheduleDraftSave()">`:q.type==='short_answer'||q.type==='case'?`<textarea id="ta-${q.id}" placeholder="输入你的答案…" oninput="scheduleDraftSave()"></textarea>`:q.type==='judge'?`<div class="opts"><label><input type="radio" name="${q.id}" value="true" onchange="pickJudge('${q.id}',true)"><span>正确</span></label><label><input type="radio" name="${q.id}" value="false" onchange="pickJudge('${q.id}',false)"><span>错误</span></label></div>`:`<div class="opts">${(q.options||[]).map((option,i)=>`<label><input type="${q.type==='single_choice'?'radio':'checkbox'}" name="${q.id}" value="${i}" onchange="pick('${q.id}',${i},this.checked)"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`}
+    </div>`).join('');
+  LIVE_QUESTIONS.forEach(question=>{
+    const saved=studentAns[question.id];
+    if(['fill','short_answer','case'].includes(question.type)){
+      const input=document.getElementById('ta-'+question.id);if(input)input.value=String(saved??'');
+    }else if(question.type==='judge'){
+      area.querySelectorAll('input').forEach(input=>{if(input.name===question.id)input.checked=input.value===String(saved);});
+    }else{
+      const selected=new Set((Array.isArray(saved)?saved:saved===undefined?[]:[saved]).map(String));
+      area.querySelectorAll('input').forEach(input=>{if(input.name===question.id)input.checked=selected.has(input.value);});
+    }
+  });
+  document.getElementById('submitBtn').disabled=false;
+  const note=document.getElementById('draftNote');
+  if(note)note.textContent=data.draft_updated_at?`已自动保存 ${formatShortDate(data.draft_updated_at)}`:'';
+}
+async function openAssignedQuiz(id){
+  const area=document.getElementById('quizArea');if(!area)return;
+  area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
+  try{renderQuizSession(await apiRequest(`/api/quiz/${encodeURIComponent(id)}`));}
+  catch(error){showApiError(area,error.message||'试卷加载失败');}
+}
+async function startRandomQuiz(){
+  const area=document.getElementById('quizArea');if(!area)return;
+  area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
+  try{renderQuizSession(await apiRequest('/api/quiz/start',{method:'POST',body:JSON.stringify({course_id:LIVE_COURSE_ID,counts:{single:1,multi:1,short:1}})}));}
+  catch(error){showApiError(area,error.message||'测验加载失败');}
+}
+async function renderQuiz(){
+  const area=document.getElementById('quizArea');
+  if(!area)return;
+  area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
+  document.getElementById('gradeArea').innerHTML='';
+  document.getElementById('submitBtn').disabled=true;
+  try{
+    const courses=await apiRequest('/api/courses');
+    const selector=document.getElementById('quizCourse');
+    if(!courses.length)throw new Error('当前账号没有可用课程');
+    const selected=LIVE_COURSE_ID&&courses.some(course=>course.id===LIVE_COURSE_ID)?LIVE_COURSE_ID:courses[0].id;
+    LIVE_COURSE_ID=selected;
+    if(selector){
+      selector.innerHTML=courses.map(course=>`<option value="${escapeHtml(course.id)}">${escapeHtml(course.name)} · ${escapeHtml(course.term)}</option>`).join('');
+      selector.value=selected;
+    }
+      if(CURRENT.role==='student'){
+        LIVE_ASSIGNMENTS=await apiRequest(`/api/quiz/assignments?course_id=${encodeURIComponent(LIVE_COURSE_ID)}`);
+        const resumable=await apiRequest(`/api/quiz/resumable?course_id=${encodeURIComponent(LIVE_COURSE_ID)}`);
+        renderAssignments(LIVE_ASSIGNMENTS,resumable);
+        if(LIVE_ASSIGNMENTS.some(item=>item.status==='ongoing')||resumable.length){
+          LIVE_QUIZ=null;LIVE_QUESTIONS=[];studentAns={};
+          const desc=document.getElementById('quizDesc');if(desc)desc.textContent='请选择一份测验继续作答';
+          area.innerHTML='<div class="desc">选择上方测验后继续答题。</div>';return;
+       }
+     }
+     await startRandomQuiz();
+  }catch(error){showApiError(area,error.message||'测验加载失败');}
+}
+function changeStudentCourse(courseId){
+  LIVE_COURSE_ID=courseId;
+  void Promise.all([renderQuiz(),buildReport()]);
+}
+function pick(id,index,checked){
+  const question=LIVE_QUESTIONS.find(item=>item.id===id);if(!question)return;
+  if(question.type==='single_choice')studentAns[id]=index;
+  else{studentAns[id]=studentAns[id]||[];studentAns[id]=checked?[...new Set([...studentAns[id],index])]:studentAns[id].filter(value=>value!==index);}
+  scheduleDraftSave();
+}
+function pickJudge(id,value){studentAns[id]=value;scheduleDraftSave();}
+let DRAFT_TIMER=null;
+function currentDraftAnswers(){
+  const answers={...studentAns};LIVE_QUESTIONS.forEach(q=>{if(['fill','short_answer','case'].includes(q.type))answers[q.id]=document.getElementById('ta-'+q.id)?.value||'';});
+  return answers;
+}
+function scheduleDraftSave(){
+  if(!LIVE_QUIZ||LIVE_QUIZ.status!=='ongoing')return;
+  const note=document.getElementById('draftNote');if(note)note.textContent='正在自动保存…';
+  if(DRAFT_TIMER)clearTimeout(DRAFT_TIMER);
+  DRAFT_TIMER=setTimeout(()=>{DRAFT_TIMER=null;void saveDraft();},2000);
+}
+async function saveDraft(){
+  if(!LIVE_QUIZ||LIVE_QUIZ.status!=='ongoing')return;
+  try{
+    const data=await apiRequest(`/api/quiz/${LIVE_QUIZ.id}/draft`,{method:'POST',body:JSON.stringify({answers:currentDraftAnswers()})});
+    const note=document.getElementById('draftNote');
+    if(note)note.textContent=data.draft_updated_at?`已自动保存 ${formatShortDate(data.draft_updated_at)}`:'';
+  }catch(error){/* 静默失败：下次作答改动会再次尝试 */}
+}
+function clearDraftUi(){
+  if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
+  const note=document.getElementById('draftNote');if(note)note.textContent='';
+}
+function answerText(question,answer){
+  if(question.type==='short_answer'||question.type==='fill'||question.type==='case')return answer||'未作答';
+  if(question.type==='judge')return answer===true?'正确':answer===false?'错误':'未作答';
+  if(question.type==='single_choice')return question.options?.[answer]||'未作答';
+  return (answer||[]).map(index=>question.options?.[index]).filter(Boolean).join('；')||'未作答';
+}
+async function submitQuiz(){
+  if(!LIVE_QUIZ)return;
+  clearDraftUi();
+  const button=document.getElementById('submitBtn');const area=document.getElementById('gradeArea');
+  button.disabled=true;area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
+   const answers={...studentAns};LIVE_QUESTIONS.forEach(q=>{if(['fill','short_answer','case'].includes(q.type))answers[q.id]=document.getElementById('ta-'+q.id)?.value||'';});
+  try{
+     const data=await apiRequest(`/api/quiz/${LIVE_QUIZ.id}/submit`,{method:'POST',body:JSON.stringify({answers})});
+     let result=data.result;
+     while(result?.status==='grading'){
+       area.innerHTML='<div class="typing"><i></i><i></i><i></i></div><div class="desc" style="margin-top:8px">批改进行中，请稍候…</div>';
+       await new Promise(resolve=>setTimeout(resolve,1000));
+       result=await apiRequest(`/api/grading/${LIVE_QUIZ.id}/status`);
+     }
+     if(!result||result.status==='grading_failed')throw new Error('批改未完成，请稍后查看结果');
+     const finalResult=result;let total=0,max=0;
+     const rows=finalResult.per_question.map(item=>{
+      const q=LIVE_QUESTIONS.find(question=>question.id===item.question_id);const score=Number(item.score);const maxScore=Number(item.max_score);total+=score;max+=maxScore;
+      const cls=score===maxScore?'g-ok':score?'g-half':'g-bad';
+      const points=(item.per_point||[]).map(point=>`${escapeHtml(point.point)} ${point.matched?'✓':'✗'}`).join('；');
+      return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(q?.stem||item.question_id)} · ${escapeHtml(item.method)}</span><span>${score} / ${maxScore} 分</span></div><div class="why">✦ 学生答案：${textHtml(answerText(q||{},answers[item.question_id]))}</div><div class="why">✦ 批改意见：${escapeHtml(item.why)}${points?` · 要点：${points}`:''}</div></div>`;
+    }).join('');
+     showGrades(area,{rows,total,max},finalResult.status==='needs_review'?'已提交，等待教师复核':'本次测验');
+    area.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(error){showApiError(area,error.message||'提交失败');button.disabled=false;}
+}
+/* ===== 教师 / 管理员 API 适配 ===== */
+function statusPill(status){
+  const cls=status==='published'||status==='ready'?'ok':status==='draft'||status==='failed'?'bad':'mid';
+  return `<span class="pill ${cls}">${escapeHtml(status)}</span>`;
+}
+function roleText(role){return role==='admin'?'管理员':role==='teacher'?'教师':'学生';}
+function questionActions(question){
+  const detail=`<button class="btn sm ghost" onclick="showQuestionDetail(this)">详情</button>`;
+  if(question.status==='draft')return `${detail} <button class="btn sm ghost" onclick="submitQuestion(this)">送审</button> <button class="btn sm ghost" onclick="deleteQuestion(this)">删除</button>`;
+  if(question.status==='reviewing')return `${detail} <button class="btn sm primary" onclick="reviewPass(this)">✓ 通过</button> <button class="btn sm ghost" onclick="reviewReject(this)">✗ 驳回</button>`;
+  if(question.status==='published')return `${detail} <button class="btn sm ghost" onclick="retireQuestion(this)">下架</button>`;
+  if(question.status==='retired')return `${detail} <span style="font-size:11.5px;color:var(--muted)">已下架</span>`;
+  return detail;
+}
+function renderQuestionTable(id,questions){
+  const table=document.getElementById(id);if(!table)return;
+  table.innerHTML=questions.length?questions.map(question=>`<tr data-id="${escapeHtml(question.id)}"><td>${escapeHtml(question.code)}</td><td>${escapeHtml((question.knowledge_points||[]).join('、')||question.stem)}</td><td>${escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`).join(''):'<tr><td colspan="5" style="color:var(--muted)">暂无题目</td></tr>';
+}
+async function loadQuestionBank(){
+  try{
+    const query=CURRENT.role==='teacher'?`?course_id=${encodeURIComponent(await ensureCourseId())}`:'';
+    const questions=await apiRequest('/api/bank'+query);
+    const counts={draft:0,reviewing:0,published:0,retired:0};questions.forEach(item=>{counts[item.status]=(counts[item.status]||0)+1;});
+    const summary=document.getElementById('questionSummary');if(summary)summary.textContent=`共 ${questions.length} 题 · 草稿 ${counts.draft} · 待审 ${counts.reviewing} · 已发布 ${counts.published} · 已下架 ${counts.retired}`;
+    BANK_QUESTIONS=questions;
+    const kpSet=new Set();questions.forEach(q=>(q.knowledge_points||[]).forEach(p=>kpSet.add(p)));
+    const kpSel=document.getElementById('bankKpFilter');
+    if(kpSel){const cur=kpSel.value;kpSel.innerHTML='<option value="">全部知识点</option>'+[...kpSet].sort().map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');kpSel.value=cur;}
+    renderQuestionTable('qBankTable',questions);
+    renderBankTable();
+  }catch(error){showApiError('qBankTable',error.message);showApiError('reviewTable',error.message);}
+}
+let BANK_QUESTIONS=[],BANK_FILTER='all',BANK_PAGE=1,BANK_SELECTED=new Set();
+function renderBankTable(){
+  const table=document.getElementById('reviewTable');if(!table)return;
+  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
+  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
+  const rows=BANK_QUESTIONS.filter(q=>{
+    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''} ${q.code||''}`.toLowerCase();
+    return(BANK_FILTER==='all'||q.status===BANK_FILTER)&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
+  });
+  const pageSize=20,pages=Math.max(1,Math.ceil(rows.length/pageSize));BANK_PAGE=Math.min(BANK_PAGE,pages);
+  const pageRows=rows.slice((BANK_PAGE-1)*pageSize,BANK_PAGE*pageSize);
+  table.innerHTML=pageRows.length?pageRows.map(question=>{
+    const stem=(question.stem||'').slice(0,60)+(question.stem&&question.stem.length>60?'…':'');
+    const kp=(question.knowledge_points||[]).join('、');
+    const checkbox=question.status==='published'?`<input type="checkbox" ${BANK_SELECTED.has(question.id)?'checked':''} onchange="toggleQuizSelect('${escapeHtml(question.id)}',this.checked)" title="勾选加入试卷">`:'';
+    return `<tr data-id="${escapeHtml(question.id)}"><td>${checkbox}</td><td>${escapeHtml(question.code)}</td><td><div>${escapeHtml(stem)}</div><small style="color:var(--muted)">${escapeHtml(kp)||'未标注'} · ${escapeHtml(question.source||'')}</small></td><td>${escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`;
+  }).join(''):'<tr><td colspan="6" style="color:var(--muted)">没有匹配的题目</td></tr>';
+  const pager=document.getElementById('bankPager');
+  if(pager)pager.innerHTML=`<button class="btn sm ghost" ${BANK_PAGE<=1?'disabled':''} onclick="BANK_PAGE--;renderBankTable()">上一页</button><span style="font-size:12px;color:var(--muted)">第 ${BANK_PAGE} / ${pages} 页 · 匹配 ${rows.length} 题</span><button class="btn sm ghost" ${BANK_PAGE>=pages?'disabled':''} onclick="BANK_PAGE++;renderBankTable()">下一页</button>`;
+  updateQuizBar();
+}
+function toggleQuizSelect(id,checked){checked?BANK_SELECTED.add(id):BANK_SELECTED.delete(id);updateQuizBar();}
+function toggleSelectAll(input){
+  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
+  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
+  BANK_QUESTIONS.filter(q=>{
+    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''}`.toLowerCase();
+    return q.status==='published'&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
+  }).forEach(q=>{input.checked?BANK_SELECTED.add(q.id):BANK_SELECTED.delete(q.id);});
+  renderBankTable();
+}
+function updateQuizBar(){
+  const bar=document.getElementById('quizBuilderBar');if(!bar)return;
+  bar.style.display=BANK_SELECTED.size?'flex':'none';
+  const count=document.getElementById('quizSelectCount');if(count)count.textContent=BANK_SELECTED.size;
+}
+async function createQuizAssignment(){
+  if(!BANK_SELECTED.size){alert('请先勾选已发布题目');return;}
+  const title=document.getElementById('quizTitle')?.value?.trim()||'随堂测验';
+  const body={course_id:await ensureCourseId(),title,question_ids:[...BANK_SELECTED]};
+  const target=document.getElementById('quizTarget')?.value||'all';
+  if(target==='selected'){
+    if(!SELECTED_STUDENT_IDS.size){alert('请先在学生管理中选择学生');return;}
+    body.student_ids=[...SELECTED_STUDENT_IDS];
+  }else if(target==='class'){
+    body.class_name=document.getElementById('studentClassFilter')?.value||'';
+    if(!body.class_name){alert('请先在学生管理中筛选一个班级');return;}
+  }
+  const dueAt=document.getElementById('quizDueAt')?.value;
+  if(dueAt)body.due_at=new Date(dueAt).toISOString();
+  const targetLabel=target==='all'?'全课程':target==='class'?body.class_name:`${body.student_ids?.length||0} 名所选学生`;
+  if(!confirm(`将「${title}」布置给${targetLabel}，共 ${BANK_SELECTED.size} 道题？`))return;
+  try{
+    const result=await apiRequest('/api/quiz/assign',{method:'POST',body:JSON.stringify(body)});
+    BANK_SELECTED.clear();updateQuizBar();
+    alert(`「${title}」已布置给 ${result.student_count} 名学生`);
+    await loadTeacherAssignments();
+  }catch(error){alert(error.message||'组卷失败');}
+}
+let TEACHER_ASSIGNMENTS=[];
+async function loadTeacherAssignments(){
+  const table=document.getElementById('assignmentTable');if(!table||CURRENT.role==='student')return;
+  try{
+    TEACHER_ASSIGNMENTS=await apiRequest(`/api/quiz/assigned?course_id=${encodeURIComponent(await ensureCourseId())}`);
+    table.innerHTML=TEACHER_ASSIGNMENTS.length?TEACHER_ASSIGNMENTS.map(item=>`<tr><td>${escapeHtml(item.title)}<br><small>${item.question_count} 题</small></td><td>${escapeHtml(item.class_name||'指定名单')}</td><td>${item.submitted_count} / ${item.target_count}</td><td>${item.pending_review_count}</td><td>${escapeHtml(item.due_at?formatShortDate(item.due_at):'未设')}</td><td><button class="btn sm ghost" onclick="openAssignmentRoster('${escapeHtml(item.id)}')">查看名单</button></td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--muted)">暂无已布置测验</td></tr>';
+  }catch(error){showApiError(table,error.message||'作业列表加载失败');}
+}
+function openAssignmentRoster(id){
+  const item=TEACHER_ASSIGNMENTS.find(row=>row.id===id);if(!item)return;
+  document.getElementById('assignmentDialogTitle').textContent=`${item.title} · ${item.submitted_count}/${item.target_count} 已交`;
+  document.getElementById('assignmentDialogBody').innerHTML=`<div class="table-scroll"><table><thead><tr><th>学生</th><th>班级</th><th>状态</th><th>得分</th><th>提交时间</th><th></th></tr></thead><tbody>${item.roster.map(row=>`<tr><td>${escapeHtml(row.display_name)}<br><small>${escapeHtml(row.student_number||'未填写学号')}</small></td><td>${escapeHtml(row.class_name||'未分班')}</td><td>${row.late&&row.status==='ongoing'?'已逾期':escapeHtml(statusText(row.status))}</td><td>${row.total===null?'—':`${row.total} / ${row.max_total}`}</td><td>${escapeHtml(row.submitted_at?formatShortDate(row.submitted_at):'—')}</td><td>${row.status==='record_deleted'?'':`<button class="btn sm ghost" onclick="document.getElementById('assignmentDialog').close();openStudentDetail('${escapeHtml(row.student_id)}','${escapeHtml(LIVE_COURSE_ID)}')">学情</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+  document.getElementById('assignmentDialog').showModal();
+}
+let AI_KNOWLEDGE_POINTS=[];
+async function loadKnowledgePoints(){
+  const area=document.getElementById('knowledgePointOptions');if(!area)return;
+  try{
+    const courseId=await ensureCourseId();
+    const data=await apiRequest(`/api/bank/knowledge-points?course_id=${encodeURIComponent(courseId)}`);
+    AI_KNOWLEDGE_POINTS=data.knowledge_points||[];
+    area.innerHTML=AI_KNOWLEDGE_POINTS.length?AI_KNOWLEDGE_POINTS.map((point,index)=>`<label><input type="checkbox" value="${escapeHtml(point)}" ${index<3?'checked':''}>${escapeHtml(point)}</label>`).join(''):'<span style="color:var(--muted);font-size:12px">暂无可选知识点</span>';
+  }catch(error){area.innerHTML=`<span style="color:var(--rose);font-size:12px">${escapeHtml(error.message||'知识点加载失败')}</span>`;}
+}
+async function generateAiQuestions(){
+  const selected=[...document.querySelectorAll('#knowledgePointOptions input:checked')].map(input=>input.value).filter(Boolean);
+  const status=document.getElementById('aiGenerateStatus');
+  if(!selected.length){if(status)status.textContent='请至少勾选一个知识点';return;}
+  const count=Math.max(1,Math.min(10,Number(document.getElementById('aiQuestionCount')?.value)||3));
+  const type=document.getElementById('aiQuestionType')?.value||'single_choice';
+  const difficulty=document.getElementById('aiDifficulty')?.value||'medium';
+  if(status)status.textContent='正在检索资料并生成题目，请稍候…';
+  try{
+    const data=await apiRequest('/api/bank/generate',{method:'POST',body:JSON.stringify({course_id:await ensureCourseId(),knowledge_points:selected,question_type:type,difficulty,count})});
+    if(status)status.textContent=`已生成 ${data.questions?.length||0} 道 draft 题目，来源资料 ${data.source_count||0} 份；请在下方送审。`;
+    await loadQuestionBank();
+  }catch(error){if(status)status.textContent=error.message||'AI 出题失败';}
+}
+async function addQuestionRow(){
+  const knowledge=prompt('输入题目知识点（如：函证控制）：');if(!knowledge?.trim())return;
+  const stem=prompt('输入简答题题干：','请简述'+knowledge+'的核心要求。');if(!stem?.trim())return;
+  try{
+    await apiRequest('/api/bank',{method:'POST',body:JSON.stringify({type:'short_answer',stem,options:[],answer:null,reference_answer:knowledge,rubric:[{point:knowledge,score:25}],knowledge_points:[knowledge],difficulty:'medium',course_id:await ensureCourseId()})});
+    await loadQuestionBank();
+  }catch(error){alert(error.message||'题目创建失败');}
+}
+async function showQuestionDetail(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  try{
+    const q=await apiRequest(`/api/bank/${id}/detail`);
+    const overlay=document.createElement('div');overlay.className='modal-overlay';overlay.style.display='flex';
+    overlay.innerHTML=`<div class="modal-card" style="max-height:82vh;overflow:auto"><div class="modal-header"><b>题目详情 · ${escapeHtml(q.code)}</b><button class="btn sm ghost">✕ 关闭</button></div><div class="modal-body"><p class="gm-label">题干</p><p class="detail-text">${escapeHtml(q.stem)}</p><p class="gm-label">选项</p><p class="detail-text">${q.options?.length?q.options.map((item,index)=>`${String.fromCharCode(65+index)}. ${escapeHtml(item)}`).join('<br>'):'非选择题'}</p><p class="gm-label">答案</p><p class="detail-text">${escapeHtml(Array.isArray(q.answer)?q.answer.join('、'):String(q.answer??'—'))}</p><p class="gm-label">参考答案 / 解析</p><p class="detail-text">${escapeHtml(q.reference_answer||'—')}</p><p class="gm-label">Rubric</p><p class="detail-text">${escapeHtml((q.rubric||[]).map(item=>`${item.point}（${item.score}分）`).join('；')||'无')}</p></div></div>`;
+    overlay.onclick=event=>{if(event.target===overlay)overlay.remove();};
+    overlay.querySelector('button').onclick=()=>overlay.remove();
+    document.body.appendChild(overlay);
+  }catch(error){alert(error.message||'题目详情加载失败');}
+}
+function questionIdFromButton(button){return button.closest('tr')?.dataset.id;}
+async function submitQuestion(button){
+  const id=questionIdFromButton(button);if(!id)return;
+  try{await apiRequest(`/api/bank/${id}/submit`,{method:'POST'});await loadQuestionBank();}catch(error){alert(error.message||'送审失败');}
+}
+async function reviewPass(button){
+  const id=questionIdFromButton(button);if(!id)return;
+  try{await apiRequest(`/api/bank/${id}/review`,{method:'POST',body:JSON.stringify({decision:'pass',comment:''})});await loadQuestionBank();}catch(error){alert(error.message||'发布失败');}
+}
+async function reviewReject(button){
+  const comment=prompt('请输入驳回理由：');if(!comment?.trim())return;
+  const id=questionIdFromButton(button);if(!id)return;
+  try{await apiRequest(`/api/bank/${id}/review`,{method:'POST',body:JSON.stringify({decision:'reject',comment})});await loadQuestionBank();}catch(error){alert(error.message||'驳回失败');}
+}
+async function retireQuestion(button){
+  const id=questionIdFromButton(button);if(!id)return;
+  try{await apiRequest(`/api/bank/${id}/retire`,{method:'POST'});await loadQuestionBank();}catch(error){alert(error.message||'下架失败');}
+}
+async function deleteQuestion(button){
+  const id=questionIdFromButton(button);if(!id||!confirm('确定删除这道草稿题吗？'))return;
+  try{await apiRequest(`/api/bank/${id}`,{method:'DELETE'});await loadQuestionBank();}catch(error){alert(error.message||'删除失败');}
+}
+
+let ALL_DOCUMENTS=[],DOC_PAGE=1;
+function formatBytes(value){
+  const bytes=Number(value)||0;
+  if(bytes>=1024*1024)return`${(bytes/1024/1024).toFixed(1)} MB`;
+  if(bytes>=1024)return`${(bytes/1024).toFixed(1)} KB`;
+  return`${bytes} B`;
+}
+function documentRow(document){
+  const ready=document.vector_status==='ready';
+  const status=ready?'已索引 · 可检索':document.vector_status==='deferred'?'未开始索引':document.vector_status;
+  const source=document.source_path||document.name;
+  const summary=document.summary?`<details style="margin-top:5px"><summary style="cursor:pointer;color:var(--teal);font-size:11px">查看 AI 摘要</summary><div style="margin-top:4px;color:var(--muted);font-size:11.5px;line-height:1.5">${escapeHtml(document.summary)}${document.topics?.length?`<br><b>主题：</b>${escapeHtml(document.topics.join('、'))}`:''}</div></details>`:'';
+  const summaryAction=`<button class="btn sm ghost" onclick="summarizeDocument(this)">${document.summary?'刷新摘要':'AI 摘要'}</button>`;
+  const action=document.shared?summaryAction:`${summaryAction} <button class="btn sm ghost" onclick="deleteDocument(this)">删除</button>`;
+  return `<tr data-id="${escapeHtml(document.id)}"><td><b>${escapeHtml(document.name)}</b><br><small style="color:var(--muted)" title="${escapeHtml(source)}">${escapeHtml(source)} · ${formatBytes(document.size)}</small>${summary}</td><td><span class="pill info">${escapeHtml(document.target_kb)}</span></td><td>${statusPill(ready?'ready':status)}</td><td>${action}</td></tr>`;
+}
+function renderDocuments(){
+  const table=document.getElementById('docTable');if(!table)return;
+  const query=(document.getElementById('docSearch')?.value||'').trim().toLowerCase();
+  const kb=document.getElementById('docKbFilter')?.value||'';
+  const rows=ALL_DOCUMENTS.filter(item=>{
+    const haystack=`${item.name||''} ${item.source_path||''}`.toLowerCase();
+    return(!kb||item.target_kb===kb)&&(!query||haystack.includes(query));
+  });
+  const pageSize=Math.max(10,Number(document.getElementById('docPageSize')?.value)||20);
+  const pages=Math.max(1,Math.ceil(rows.length/pageSize));DOC_PAGE=Math.min(DOC_PAGE,pages);
+  const pageRows=rows.slice((DOC_PAGE-1)*pageSize,DOC_PAGE*pageSize);
+  table.innerHTML=pageRows.length?pageRows.map(documentRow).join(''):'<tr><td colspan="4" style="color:var(--muted)">没有匹配的资料</td></tr>';
+  const counts=Object.fromEntries(['audit_textbook','audit_standards','audit_cases','cpa_question_bank'].map(key=>[key,ALL_DOCUMENTS.filter(item=>item.target_kb===key).length]));
+  const summary=document.getElementById('docSummary');
+  if(summary)summary.textContent=`共 ${ALL_DOCUMENTS.length} 份 · 匹配 ${rows.length} · 教材 ${counts.audit_textbook} · 准则 ${counts.audit_standards} · 案例 ${counts.audit_cases} · 题库 ${counts.cpa_question_bank}`;
+  const pager=document.getElementById('docPager');if(pager)pager.innerHTML=`<button class="btn sm ghost" ${DOC_PAGE<=1?'disabled':''} onclick="DOC_PAGE--;renderDocuments()">上一页</button><span style="font-size:12px;color:var(--muted)">第 ${DOC_PAGE} / ${pages} 页 · 当前 ${pageRows.length} 份</span><button class="btn sm ghost" ${DOC_PAGE>=pages?'disabled':''} onclick="DOC_PAGE++;renderDocuments()">下一页</button>`;
+}
+async function loadDocuments(){
+  try{
+    ALL_DOCUMENTS=await apiRequest('/api/docs');renderDocuments();
+  }catch(error){showApiError('docTable',error.message);}
+}
+async function importDoc(){
+  const file=document.getElementById('docFile')?.files?.[0];
+  if(!file){alert('请选择 PDF、DOCX 或 Markdown 文件');return;}
+  const target=document.getElementById('docTarget').value.split(' · ')[0];const form=new FormData();
+  form.append('file',file);form.append('target_kb',target);
+  try{await apiRequest('/api/docs/upload',{method:'POST',body:form});document.getElementById('docName').value='';document.getElementById('docFile').value='';await loadDocuments();}
+  catch(error){alert(error.message||'资料上传失败');}
+}
+async function deleteDocument(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  try{await apiRequest(`/api/docs/${id}`,{method:'DELETE'});await loadDocuments();}catch(error){alert(error.message||'资料删除失败');}
+}
+
+function graphButton(node){
+  const button=document.createElement('button');button.className='gnode';button.dataset.n=node.name;button.dataset.id=node.id;button.textContent=node.name;button.onclick=()=>openGNode(button);return button;
+}
+function graphGroup(dim,branch){return document.querySelector(`.gnodes[data-dim="${dim}"][data-branch="${branch}"]`);}
+async function loadGraphFromApi(){
+  try{
+    const nodes=await apiRequest('/api/graph/nodes');
+    nodes.forEach(node=>{GRAPH_NODES[node.id]=node;});
+    document.querySelectorAll('.gnodes').forEach(group=>{group.innerHTML='';});
+    nodes.forEach(node=>graphGroup(node.graph,node.branch)?.appendChild(graphButton(node)));
+    document.querySelectorAll('.gnodes').forEach(group=>refreshBranch(group));
+  }catch(error){}
+}
+function toggleGraphEdit(){
+  graphEdit=!graphEdit;document.getElementById('graphEditBtn').textContent=graphEdit?'✅ 完成编辑':'✏️ 编辑模式';document.getElementById('graphEditTip').style.display=graphEdit?'inline':'none';
+  document.querySelectorAll('.gnodes').forEach(group=>refreshBranch(group));
+}
+function refreshBranch(group){
+  group.querySelectorAll('.gadd,.gdel').forEach(item=>item.remove());if(!graphEdit)return;
+  group.querySelectorAll('.gnode').forEach(node=>{
+    const del=document.createElement('button');del.className='gdel';del.textContent='✕';del.title='删除此节点';del.onclick=async event=>{
+      event.stopPropagation();const id=node.dataset.id;if(!id||!confirm('删除节点「'+node.dataset.n+'」？'))return;
+      try{await apiRequest(`/api/graph/nodes/${id}`,{method:'DELETE'});delete GRAPH_NODES[id];await loadGraphFromApi();}catch(error){alert(error.message||'节点删除失败');}
+    };node.appendChild(del);
+  });
+  const add=document.createElement('button');add.className='gnode gadd';add.textContent='＋ 添加节点';add.onclick=async()=>{
+    const name=prompt('输入新节点名称：');if(!name?.trim())return;
+    const description=prompt('输入节点说明（可留空）：','')||'';
+    try{await apiRequest('/api/graph/nodes',{method:'POST',body:JSON.stringify({graph:group.dataset.dim,branch:group.dataset.branch,name:name.trim(),description})});await loadGraphFromApi();}catch(error){alert(error.message||'节点创建失败');}
+  };group.appendChild(add);
+}
+
+async function loadChatMonitor(){
+  try{
+    const query=CURRENT.role==='teacher'&&LIVE_COURSE_ID?`?course_id=${encodeURIComponent(LIVE_COURSE_ID)}`:'';
+    const items=await apiRequest(`/api/chat/monitor${query}`);
+    QA_LOG.splice(0,QA_LOG.length,...items.map(item=>({
+      id:item.id,user_id:item.user_id,stu:item.display_name,student_number:item.student_number,
+      course_id:item.course_id,course_name:item.course_name,created_at:item.created_at,
+      q:item.question,response:item.response,a:item.response?.answer_markdown||'已记录',key:item.important,
+    })));
+    renderQaTable();
+  }catch(error){showApiError('qaTable',error.message);}
+}
+async function loadPendingRegistrations(){
+  const table=document.getElementById('pendingTable');if(!table)return;
+  try{
+    const rows=await apiRequest('/api/enrollment/pending');
+    table.innerHTML=rows.length?rows.map(row=>`<tr data-id="${escapeHtml(row.id)}">
+      <td><b>${escapeHtml(row.display_name||row.username)}</b><br><small style="color:var(--muted)">${escapeHtml(row.student_number||'未填写学号')} · ${escapeHtml(row.username)}</small></td>
+      <td>${escapeHtml(row.phone||'—')}</td>
+      <td>${escapeHtml(row.requested_course_name||'—')}${row.requested_class_name?`<br><small style="color:var(--muted)">${escapeHtml(row.requested_class_name)}</small>`:''}</td>
+      <td>${escapeHtml((row.requested_at||'').replace('T',' ').slice(0,16))}</td>
+      <td><button class="btn sm primary" onclick="approveRegistration(this)">✓ 通过</button>
+          <button class="btn sm ghost" onclick="rejectRegistration(this)">✗ 驳回</button></td></tr>`).join('')
+      :'<tr><td colspan="5" style="color:var(--muted)">暂无待审核的注册申请</td></tr>';
+  }catch(error){showApiError('pendingTable',error.message||'待审核列表加载失败');}
+}
+async function approveRegistration(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  const className=prompt('分班名称（可留空）：','');if(className===null)return;
+  try{
+    await apiRequest(`/api/enrollment/${id}/approve`,{method:'POST',body:JSON.stringify({class_name:className.trim()})});
+    await loadPendingRegistrations();loadCourseRoster();
+  }catch(error){alert(error.message||'审核失败');}
+}
+async function rejectRegistration(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  const reason=prompt('驳回理由（可选）：','');if(reason===null)return;
+  if(!confirm('确定驳回该注册申请吗？该账号将被删除。'))return;
+  try{await apiRequest(`/api/enrollment/${id}/reject`,{method:'POST',body:JSON.stringify({reason:reason.trim()})});await loadPendingRegistrations();}
+  catch(error){alert(error.message||'驳回失败');}
+}
+async function loadClassCode(){
+  const box=document.getElementById('classCodeBox');if(!box)return;
+  try{
+    const courses=await apiRequest('/api/courses');
+    box.innerHTML=courses.length?courses.map(course=>`<div class="code-chip">课堂代码
+      <b>${escapeHtml(course.class_code||'—')}</b><span>${escapeHtml(course.name)}</span>
+      <button class="btn sm ghost" onclick="rotateClassCode('${escapeHtml(course.id)}')">重新生成</button></div>`).join('')
+      :'<span style="color:var(--muted);font-size:12px">暂无课程</span>';
+  }catch(error){box.innerHTML='';}
+}
+async function rotateClassCode(courseId){
+  if(!confirm('重新生成后旧课堂代码立即失效（已提交的申请不受影响），确定继续吗？'))return;
+  try{await apiRequest(`/api/courses/${encodeURIComponent(courseId)}/class-code`,{method:'POST'});await loadClassCode();}
+  catch(error){alert(error.message||'课堂代码生成失败');}
+}
+
+async function loadAdminUsers(){
+  try{
+     const users=await apiRequest('/api/admin/users');document.getElementById('userTable').innerHTML=users.map(user=>`<tr data-id="${escapeHtml(user.id)}"><td>${escapeHtml(user.display_name)}<br><small>${escapeHtml(user.username)}</small></td><td><span class="pill info">${roleText(user.role)}</span></td><td>${statusPill(user.status==='active'?'正常':'已禁用')}</td><td>${user.last_login_at?escapeHtml(user.last_login_at):'暂无'}</td><td>${user.id===CURRENT.id?'<span style="color:var(--muted)">当前账号</span>':`<button class="btn sm ghost" onclick="toggleAdminUser(this)">${user.status==='active'?'禁用':'启用'}</button> <button class="btn sm ghost" onclick="resetAdminUserPassword(this)">重置密码</button> <button class="btn sm ghost" onclick="deleteAdminUser(this)">删除</button>`}</td></tr>`).join('');
+    await loadAuditLogs();
+  }catch(error){showApiError('userTable',error.message);}
+}
+async function resetAdminUserPassword(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  const password=prompt('设置新密码（至少 12 位）：');if(!password)return;
+  if(password.length<12){alert('新密码至少 12 位');return;}
+  if(prompt('再次输入新密码确认：')!==password){alert('两次输入不一致');return;}
+  if(prompt('再次输入新密码确认：')!==password){alert('两次输入不一致');return;}
+  if(!confirm('确认重置该账号密码？该账号的其他登录会话将失效。'))return;
+  try{await apiRequest(`/api/admin/users/${encodeURIComponent(id)}/reset-password`,{method:'POST',body:JSON.stringify({new_password:password})});alert('密码已重置，请通过安全渠道告知用户。');}
+  catch(error){alert(error.message||'密码重置失败');}
+}
+async function downloadBackup(){
+  try{
+    const response=await fetch('/api/admin/backup?format=archive',{credentials:'same-origin'});
+    if(!response.ok)throw new Error('备份导出失败');
+    const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='审计智能学伴备份.json';link.click();URL.revokeObjectURL(link.href);
+  }catch(error){alert(error.message||'备份导出失败');}
+}
+async function restoreBackup(input){
+  const file=input.files?.[0];if(!file)return;
+  if(!confirm('恢复备份会覆盖当前业务数据，确定继续吗？')){input.value='';return;}
+  try{const form=new FormData();form.append('file',file);await apiRequest('/api/admin/restore',{method:'POST',body:form});alert('备份已恢复，请重新登录');await apiRequest('/api/auth/logout',{method:'POST'});location.reload();}catch(error){alert(error.message||'备份恢复失败');}finally{input.value='';}
+}
+async function loadAdminCourses(){
+  try{
+    const [courses,users]=await Promise.all([apiRequest('/api/admin/courses'),apiRequest('/api/admin/users')]);
+    const names=Object.fromEntries(users.map(user=>[user.id,user.display_name]));
+    document.getElementById('courseTable').innerHTML=courses.map(course=>`<tr data-id="${escapeHtml(course.id)}" data-teacher="${escapeHtml(course.teacher_id)}"><td><b>${escapeHtml(course.name)}</b><br><small>${escapeHtml(course.id)}</small></td><td>${escapeHtml(course.term)}</td><td>${escapeHtml(names[course.teacher_id]||course.teacher_id)}</td><td><button class="btn sm ghost" onclick="editAdminCourse(this)">编辑</button> <button class="btn sm ghost" onclick="deleteAdminCourse(this)">删除</button></td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">暂无课程</td></tr>';
+  }catch(error){showApiError('courseTable',error.message);}
+}
+async function addCourseRow(){
+  const id=prompt('课程编号（小写字母、数字和 -）：');if(!id?.trim())return;
+  const name=prompt('课程名称：');if(!name?.trim())return;
+  const term=prompt('学期：','2026-2027');if(!term?.trim())return;
+  const teacherUsername=prompt('负责教师账号：','teacher01');if(!teacherUsername?.trim())return;
+  try{
+    const users=await apiRequest('/api/admin/users');const teacher=users.find(user=>user.username===teacherUsername.trim()&&user.role==='teacher');
+    if(!teacher)throw new Error('找不到有效教师账号');
+    await apiRequest('/api/admin/courses',{method:'POST',body:JSON.stringify({id:id.trim(),name:name.trim(),term:term.trim(),teacher_id:teacher.id})});
+    await loadAdminCourses();
+  }catch(error){alert(error.message||'课程创建失败');}
+}
+async function deleteAdminCourse(button){
+  const id=button.closest('tr')?.dataset.id;if(!id||!confirm('确定删除该课程吗？'))return;
+  try{await apiRequest(`/api/admin/courses/${encodeURIComponent(id)}`,{method:'DELETE'});await loadAdminCourses();}catch(error){alert(error.message||'课程删除失败');}
+}
+async function editAdminCourse(button){
+  const row=button.closest('tr');const id=row?.dataset.id;if(!id)return;
+  const name=prompt('课程名称：',row.querySelector('b')?.textContent||'');if(!name?.trim())return;
+  const term=prompt('学期：',row.children[1]?.textContent||'');if(!term?.trim())return;
+  try{await apiRequest(`/api/admin/courses/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({name:name.trim(),term:term.trim(),teacher_id:row.dataset.teacher})});await loadAdminCourses();}catch(error){alert(error.message||'课程更新失败');}
+}
+async function addUserRow(){
+  const username=prompt('输入登录账号：');if(!username?.trim())return;
+  const displayName=prompt('输入真实姓名：',username);if(!displayName?.trim())return;
+  const role=(prompt('输入角色（student / teacher / admin）：','student')||'student').trim();
+  const studentNumber=role==='student'?(prompt('输入学号：')||'').trim():'';
+  const password=prompt('输入初始密码（至少 8 位）：','student123*');if(!password)return;
+  try{await apiRequest('/api/admin/users',{method:'POST',body:JSON.stringify({username:username.trim(),display_name:displayName.trim(),student_number:studentNumber,password,role})});await loadAdminUsers();}catch(error){alert(error.message||'用户创建失败');}
+}
+async function deleteAdminUser(button){
+  const id=button.closest('tr')?.dataset.id;if(!id||!confirm('确定删除该用户吗？'))return;
+  try{await apiRequest(`/api/admin/users/${id}`,{method:'DELETE'});await loadAdminUsers();}catch(error){alert(error.message||'用户删除失败');}
+}
+async function toggleAdminUser(button){
+  const row=button.closest('tr');const id=row?.dataset.id;if(!id)return;
+  const disabling=button.textContent.trim()==='禁用';
+  try{await apiRequest(`/api/admin/users/${id}/status`,{method:'PATCH',body:JSON.stringify({status:disabling?'disabled':'active'})});await loadAdminUsers();}catch(error){alert(error.message||'用户状态更新失败');}
+}
+async function loadAuditLogs(){
+  try{
+    const logs=await apiRequest('/api/admin/audit-logs');document.getElementById('auditTable').innerHTML=logs.slice(-100).reverse().map(log=>`<tr><td>${escapeHtml(log.at)}</td><td>${escapeHtml(log.actor_id||'匿名')}</td><td>${escapeHtml(log.action)}</td><td><span class="pill ok">已记录</span></td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">暂无日志</td></tr>';
+  }catch(error){showApiError('auditTable',error.message);}
+}
+
+async function summarizeDocument(button){
+  const id=button.closest('tr')?.dataset.id;if(!id)return;
+  button.disabled=true;button.textContent='生成中…';
+  try{await apiRequest(`/api/docs/${id}/summary`);await loadDocuments();}
+  catch(error){alert(error.message||'摘要生成失败');button.disabled=false;button.textContent='AI 摘要';}
+}
+
+async function buildReport(){
+  const rep=document.getElementById('repArea');if(!rep)return;
+  try{
+    if(CURRENT.role==='student'){
+      const course=LIVE_COURSE_ID?`course_id=${encodeURIComponent(LIVE_COURSE_ID)}`:'';
+      const [data,history]=await Promise.all([apiRequest(`/api/progress/me${course?`?${course}`:''}`),apiRequest(`/api/progress/history?limit=100${course?`&${course}`:''}`)]);
+      const rows=(data.mastery||[]).filter(row=>row.attempts>0).sort((a,b)=>a.mastery-b.mastery);
+      const latest=history.find(item=>item.status==='graded');
+      const weak=rows.filter(row=>row.attempts>=2&&row.mastery<60).length,mastered=rows.filter(row=>row.attempts>=2&&row.mastery>=80).length;
+      const classified=rows.some(row=>row.attempts>=2);
+      const insufficient=rows.filter(row=>row.attempts<2).length;
+      const renderBars=items=>items.map(row=>`<div class="bar ${row.attempts>=2&&row.mastery<60?'weak':''}"><span class="lb" title="${escapeHtml(row.knowledge_point)}">${escapeHtml(row.knowledge_point)}</span><div class="tk"><div class="fl" data-w="${Math.max(0,Math.min(100,row.mastery))}"></div></div><span class="vv">${Math.round(row.mastery)}%</span></div>`).join('');
+      rep.innerHTML=`<div class="summary-grid"><div class="summary-stat"><span>最近已确认成绩</span><b>${latest&&latest.max_total?`${Math.round(latest.total/latest.max_total*100)}%`:'—'}</b></div><div class="summary-stat"><span>已掌握知识点</span><b>${classified?mastered:'—'}</b></div><div class="summary-stat"><span>待加强知识点</span><b>${classified?weak:'—'}</b></div></div>
+        <div class="card" style="margin:0"><h2 style="font-size:13.5px">知识点掌握度</h2><p class="desc">${rows.length?`基于 ${rows.reduce((sum,row)=>sum+row.attempts,0)} 次知识点作答；${insufficient?`${insufficient} 个知识点样本不足（少于 2 次），暂不归类为掌握或薄弱。`:''}`:'完成已提交测验后显示掌握度。'}</p>
+        ${renderBars(rows.slice(0,5))||'<p class="desc">暂无已测知识点</p>'}${rows.length>5?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--accent);font-size:12px">查看其余 ${rows.length-5} 个知识点</summary>${renderBars(rows.slice(5))}</details>`:''}</div>`;
+      renderStudentHistory(history);
+    }else{
+      const data=await apiRequest(`/api/progress/class?course_id=${encodeURIComponent(await ensureCourseId())}`);
+      const weakPoints=(data.weak_points||[]).filter(point=>point.average_mastery<60).slice(0,10);
+      rep.innerHTML=`<div class="card" style="margin:0"><h2 style="font-size:13.5px">班级需加强知识点</h2><p class="desc">${data.students_with_data||0} / ${data.student_count||0} 名学生有掌握度记录；知识点需至少 2 次作答才纳入统计。</p>${weakPoints.map(point=>`<div class="bar weak"><span class="lb">${escapeHtml(point.knowledge_point)}</span><div class="tk"><div class="fl" data-w="${point.average_mastery}"></div></div><span class="vv">${point.average_mastery}%</span><small style="width:34px;text-align:right;color:var(--muted)">${point.student_count}人</small></div>`).join('')||'<p class="desc">暂无足够样本或当前班级没有低于 60% 的知识点。</p>'}</div>`;
+    }
+    document.getElementById('repEmpty').style.display='none';rep.style.display='block';requestAnimationFrame(()=>rep.querySelectorAll('.fl').forEach(fill=>{fill.style.transform=`scaleX(${Number(fill.dataset.w)/100})`;}));
+  }catch(error){showApiError(rep,error.message||'学情加载失败');}
+}
+function renderStudentHistory(history){
+  const area=document.getElementById('historyArea');if(!area)return;
+  const recent=history.slice(0,5),older=history.slice(5,20);
+  const table=items=>`<div class="table-scroll"><table><thead><tr><th>时间</th><th>测验</th><th>得分</th><th>状态</th><th>错题</th></tr></thead><tbody>${renderHistoryRows(items)||'<tr><td colspan="5">暂无已提交测验</td></tr>'}</tbody></table></div>`;
+  const wrong=recent.flatMap(item=>(item.wrong_questions||[]).map(question=>({title:item.title,question}))).slice(0,5);
+  area.innerHTML=`<div class="card" style="margin:0"><h2 style="font-size:13.5px">近期测验</h2>${table(recent)}${older.length?`<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--accent);font-size:12px">查看更早记录（${older.length}）</summary>${table(older)}</details>`:''}</div>
+    <details class="card" style="margin:12px 0 0"><summary style="cursor:pointer;font-size:13.5px;font-weight:700">错题回顾（${wrong.length}）</summary>${wrong.map(({title,question})=>`<div class="detail-section"><h3>${escapeHtml(title||'测验')} · ${escapeHtml(question.stem)}</h3><p>你的答案：${escapeHtml(typeof question.submitted_answer==='string'?question.submitted_answer:JSON.stringify(question.submitted_answer??'未作答'))}</p><p>${escapeHtml(question.why)}</p><p>知识点：${escapeHtml((question.knowledge_points||[]).join('、')||'未标注')}</p></div>`).join('')||'<p class="desc">暂无已确认错题</p>'}</details>`;
+}
+async function loadRoleData(user){
+  const switcher=document.getElementById('courseSwitch');
+  const courseLabel=document.getElementById('courseCurrentLabel');
+  if(user.role==='student'){
+    switcher.style.display='none';
+    courseLabel.style.display='none';
+    try{
+      const courses=await apiRequest('/api/courses');
+      if(!courses.some(course=>course.id===LIVE_COURSE_ID))LIVE_COURSE_ID=courses[0]?.id||null;
+    }catch(error){}
+    buildReport();
+  }else{
+    try{
+      const courses=await apiRequest('/api/courses');
+      switcher.style.display=courses.length>1?'block':'none';
+      courseLabel.style.display=courses.length===1?'inline-block':'none';
+      switcher.innerHTML=courses.map(course=>`<option value="${escapeHtml(course.id)}">${escapeHtml(course.name)} · ${escapeHtml(course.term)}</option>`).join('');
+      if(!courses.some(course=>course.id===LIVE_COURSE_ID))LIVE_COURSE_ID=courses[0]?.id||null;
+      if(LIVE_COURSE_ID)switcher.value=LIVE_COURSE_ID;
+      switcher.disabled=false;
+      if(courses.length===1)courseLabel.textContent=`${courses[0].name} · ${courses[0].term}`;
+    }catch(error){switcher.style.display='none';courseLabel.style.display='none';}
+  }
+  loadGraphFromApi();
+  if(user.role==='teacher'){
+    loadQuestionBank();loadKnowledgePoints();loadDocuments();loadChatMonitor();buildReport();loadCourseRoster();loadReviewQueue();loadTeacherAssignments();loadPendingRegistrations();loadClassCode();loadStudentDirectory();loadExcelArchiveTools();
+  }
+  if(user.role==='admin'){loadQuestionBank();loadKnowledgePoints();loadAdminUsers();loadAdminCourses();loadDocuments();loadPendingRegistrations();loadClassCode();loadExcelArchiveTools();}
+}
+function changeActiveCourse(courseId){
+  if(!courseId||courseId===LIVE_COURSE_ID)return;
+  LIVE_COURSE_ID=courseId;BANK_SELECTED.clear();SELECTED_STUDENT_IDS.clear();BANK_PAGE=1;STUDENT_PAGE=1;
+  const search=document.getElementById('studentSearch');if(search)search.value='';
+  const classFilter=document.getElementById('studentClassFilter');if(classFilter)classFilter.value='';
+  const target=document.getElementById('quizTarget');if(target)target.value='all';
+  void loadRoleData(CURRENT);
+}
+let CLEANUP_PREVIEW=null;
+function localDateValue(date){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
+function selectCleanupPreset(){
+  const preset=document.getElementById('cleanupPreset').value;
+  const dateInput=document.getElementById('cleanupBefore'),summary=document.getElementById('cleanupRangeSummary');
+  invalidateCleanupPreview();
+  if(preset==='custom'){
+    dateInput.disabled=false;summary.textContent='自定义截止日期（当天记录也会清理）';return;
+  }
+  dateInput.disabled=true;
+  if(preset==='all'){
+    dateInput.value='';summary.textContent='将清理所选课程与记录类型中的全部历史记录';return;
+  }
+  const cutoff=new Date(Date.now()-Number(preset)*86400000);
+  dateInput.value=localDateValue(cutoff);
+  summary.textContent=`将清理早于 ${dateInput.value} 的记录`;
+}
+async function loadExcelArchiveTools(){
+  const archive=document.getElementById('archiveCourse'),cleanup=document.getElementById('cleanupCourse');if(!archive||!cleanup)return;
+  try{
+    const [courses,schedule,snapshots]=await Promise.all([
+      apiRequest('/api/courses'),apiRequest('/api/admin/excel/schedule'),apiRequest('/api/admin/excel/snapshots'),
+    ]);
+    const options='<option value="">全部可访问课程</option>'+courses.map(course=>`<option value="${escapeHtml(course.id)}">${escapeHtml(course.name)} · ${escapeHtml(course.term)}</option>`).join('');
+    archive.innerHTML=options;cleanup.innerHTML=options;
+    document.getElementById('cleanupBefore').max=localDateValue(new Date());
+    document.getElementById('excelScheduleEnabled').checked=schedule.enabled;
+    document.getElementById('excelScheduleInterval').value=String(schedule.interval_hours||24);
+    updateExcelScheduleStatus(schedule);
+    const byId=Object.fromEntries(courses.map(course=>[course.id,`${course.name} · ${course.term}`]));
+    document.getElementById('excelSnapshotTable').innerHTML=snapshots.length?snapshots.map(item=>`<tr><td>${escapeHtml(formatShortDate(item.created_at))}</td><td>${item.course_ids?.length===courses.length?'全部可访问课程':(item.course_ids||[]).map(id=>escapeHtml(byId[id]||id)).join('、')}</td><td>${formatBytes(item.bytes)}</td><td><button class="btn sm ghost" onclick="downloadExcelSnapshot('${escapeHtml(item.id)}')">下载</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--muted)">暂无已保存的 Excel 快照</td></tr>';
+  }catch(error){showApiError('excelSnapshotTable',error.message||'归档信息加载失败');}
+}
+function updateExcelScheduleStatus(schedule){
+  const text=document.getElementById('excelScheduleStatus');if(!text)return;
+  text.textContent=schedule.enabled?`已开启 · 每 ${schedule.interval_hours} 小时保存一次${schedule.next_at?` · 下次 ${formatShortDate(schedule.next_at)}`:''}`:`自动保存已关闭${schedule.last_saved_at?` · 最近保存 ${formatShortDate(schedule.last_saved_at)}`:''}`;
+}
+async function saveExcelSchedule(){
+  const enabled=document.getElementById('excelScheduleEnabled').checked;
+  const interval_hours=Number(document.getElementById('excelScheduleInterval').value)||24;
+  try{
+    const schedule=await apiRequest('/api/admin/excel/schedule',{method:'PUT',body:JSON.stringify({enabled,interval_hours})});
+    updateExcelScheduleStatus(schedule);
+  }catch(error){
+    document.getElementById('excelScheduleStatus').textContent=error.message||'保存计划失败';
+    document.getElementById('excelScheduleEnabled').checked=false;
+  }
+}
+async function createExcelSnapshot(){
+  const button=document.querySelector('#p14 .student-controls .btn.primary');if(button)button.disabled=true;
+  try{
+    const response=await fetch('/api/admin/excel/snapshot',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({course_id:document.getElementById('archiveCourse').value||null})});
+    if(!response.ok){const body=await response.json().catch(()=>null);throw new Error(body?.message||`Excel 导出失败（${response.status}）`);}
+    const blob=await response.blob(),link=document.createElement('a'),url=URL.createObjectURL(blob);
+    link.href=url;link.download=`审计课程记录_${new Date().toISOString().slice(0,10)}.xlsx`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    await loadExcelArchiveTools();
+  }catch(error){alert(error.message||'Excel 导出失败');}
+  finally{if(button)button.disabled=false;}
+}
+function downloadExcelSnapshot(id){location.href=`/api/admin/excel/snapshots/${encodeURIComponent(id)}/download`;}
+function cleanupCategories(){return[...document.querySelectorAll('#cleanupCategories input[type=checkbox]:checked')].map(input=>input.value);}
+function invalidateCleanupPreview(){
+  CLEANUP_PREVIEW=null;
+  document.getElementById('cleanupPreview').style.display='none';
+  document.getElementById('cleanupAction').style.display='none';
+}
+function cleanupRequest(){
+  const preset=document.getElementById('cleanupPreset').value;
+  const categories=cleanupCategories();
+  if(!categories.length)throw new Error('至少选择一种历史记录');
+  const request={categories};
+  if(preset==='all')request.all_records=true;
+  else if(preset==='custom'){
+    const date=document.getElementById('cleanupBefore').value;
+    if(!date)throw new Error('请选择清理截止日');
+    request.before=new Date(`${date}T23:59:59.999`).toISOString();
+  }else request.before=new Date(Date.now()-Number(preset)*86400000).toISOString();
+  const course_id=document.getElementById('cleanupCourse').value;if(course_id)request.course_id=course_id;
+  return request;
+}
+async function previewHistoryCleanup(){
+  const message=document.getElementById('cleanupStatus');
+  try{
+    const request=cleanupRequest(),params=new URLSearchParams();
+    if(request.before)params.set('before',request.before);
+    if(request.all_records)params.set('all_records','true');
+    request.categories.forEach(category=>params.append('categories',category));
+    if(request.course_id)params.set('course_id',request.course_id);
+    const preview=await apiRequest(`/api/admin/history/cleanup-preview?${params}`);
+    CLEANUP_PREVIEW={request,preview};
+    const names={quiz:'已完成测验记录',chat:'答疑记录',classroom:'课堂互动记录',usage:'AI 用量记录'};
+    const lines=Object.entries(preview.counts).filter(([,count])=>count>0).map(([key,count])=>`${names[key]}：${count} 条`);
+    const box=document.getElementById('cleanupPreview');
+    box.textContent=preview.total?`${preview.all_records?'全部时间范围':`截止 ${formatShortDate(preview.before)}`}，预计清理 ${preview.total} 条：${lines.join('；')}。执行前会自动保存完整 Excel 快照。审计日志和未完成/待复核测验保留。`:'该范围没有可清理记录。';
+    box.style.display='block';document.getElementById('cleanupAction').style.display=preview.total?'flex':'none';
+    message.textContent='';
+  }catch(error){message.textContent=error.message||'清理范围预览失败';}
+}
+async function confirmHistoryCleanup(){
+  if(!CLEANUP_PREVIEW)return;
+  const {request,preview}=CLEANUP_PREVIEW;
+  if(!confirm(`${preview.all_records?'全部删除所选类型的历史记录':`清理 ${preview.total} 条历史记录`}，并先生成 Excel 快照。审计日志、未完成测验和待复核记录会保留。继续？`))return;
+  const status=document.getElementById('cleanupStatus');
+  try{
+    const result=await apiRequest('/api/admin/history/cleanup',{method:'POST',body:JSON.stringify({...request,confirmed:true})});
+    status.textContent=`已清理 ${result.total} 条历史记录；清理前快照已保存。`;
+    invalidateCleanupPreview();await loadExcelArchiveTools();
+    if(CURRENT.role==='teacher')await Promise.all([loadStudentDirectory(),loadTeacherAssignments(),loadChatMonitor(),loadCourseRoster(),loadReviewQueue(),buildReport()]);
+  }catch(error){status.textContent=error.message||'历史清理失败';}
+}
+const baseEnterApp=enterApp;
+enterApp=function(user){baseEnterApp(user);void loadRoleData(user);};
+
+/* ===== 初始化 ===== */
+CURRENT={role:'student',name:'我'};
+document.getElementById('loginBtn').onclick=doLogin;
+renderRoster();
+renderQaTable();
+void bootAuth();
+/* 延迟初始化:每次切到 p11 面板时尝试 */
+
+</script>
+</body>
+</html>
