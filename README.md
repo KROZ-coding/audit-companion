@@ -11,6 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-%E5%90%8E%E7%AB%AF-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Tests](https://img.shields.io/badge/tests-85%20passed-brightgreen)](server/tests/test_smoke.py)
 [![Load Test](https://img.shields.io/badge/60%E4%BA%BA%E5%8E%8B%E6%B5%8B-%E7%AD%94%E7%96%91100%25%E5%91%BD%E4%B8%AD%E8%B5%84%E6%96%99-f59e0b)](#-测试与压测)
+[![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-d97706)](#-许可)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#-快速开始)
 
 <img src="docs/screenshots/student-quiz.png" width="49%" alt="学生答题视图"> <img src="docs/screenshots/teacher-grading.png" width="49%" alt="教师批改中心">
@@ -109,10 +110,25 @@ audit-companion/
 - [ ] 多进程 / 多实例部署的 SQLite 迁移
 - [ ] 浏览器级退出与恢复作答自动化测试
 
+## 📄 许可
+
+本项目采用 [PolyForm Noncommercial 1.0.0](LICENSE) 许可发布 —— 这是专为
+"可自由使用与修改、但禁止商业牟利"设计的开源许可证（PolyForm 家族，Redis、Sentry
+等项目的源码可用性条款同源）。简单说：
+
+| | 内容 |
+|---|---|
+| ✅ 允许 | 查看源码、个人学习、课堂教学、科研与公益用途；自由修改与二次开发；分发修改版本（须保留版权声明与本许可，附上许可原文或其链接） |
+| ❌ 禁止 | 任何以商业利益或金钱补偿为目的的使用 —— 出售、付费部署、集成进商业产品、以本项目的修改版直接牟利 |
+| 🤝 商用授权 | 需要商业使用请联系仓库所有者取得单独授权 |
+
+教育机构、公益组织与政府机构的内部教学使用属于许可内的"非商业目的"。
+本节仅为简要说明，完整条款以 [LICENSE](LICENSE) 原文为准。
+
 ---
 
 <div align="center">
 
-**审计智能学伴** · 经管数智审计课程建设配套 · 单机演示与校内教学场景
+**审计智能学伴** · 经管数智审计课程建设配套 · 单机演示与校内教学场景 · PolyForm Noncommercial 1.0.0
 
 </div>
