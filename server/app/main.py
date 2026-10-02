@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import settings
-from .routers import admin, auth, bank, chat, courses, docs, enrollment, grading, graph, knowledge, progress, quiz
+from .routers import admin, auth, bank, chat, courses, docs, enrollment, grading, graph, knowledge, progress, quiz, practice
 from .store import Store
 from .services.excel_export import run_snapshot_scheduler
 from .utils.security import verify_password
@@ -148,7 +148,7 @@ def create_app() -> FastAPI:
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"code": "validation_error", "message": "请求参数校验失败", "errors": jsonable_encoder(exc.errors())})
 
-    for router in (auth.router, chat.router, quiz.router, grading.router, progress.router, bank.router, docs.router, graph.router, knowledge.router, courses.router, enrollment.router, admin.router):
+    for router in (auth.router, chat.router, quiz.router, grading.router, progress.router, bank.router, docs.router, graph.router, knowledge.router, courses.router, enrollment.router, practice.router, admin.router):
         application.include_router(router)
 
     if VENDOR_DIR.is_dir():

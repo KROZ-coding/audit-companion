@@ -16,7 +16,7 @@ from uuid import uuid4
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from .config import Settings
-from .models import Course, GradingResult, Question, QuizSession, User
+from .models import Course, GradingResult, PracticeSession, Question, QuizSession, User
 from .services.knowledge_base import LocalKnowledgeBase
 from .utils.security import hash_password
 
@@ -73,6 +73,23 @@ def _quiz_from_state(state: dict[str, Any]) -> QuizSession:
     )
 
 
+def _practice_state(practice: PracticeSession) -> dict[str, Any]:
+    state = _asdict(practice)
+    state["created_at"] = _iso(practice.created_at)
+    state["graded_at"] = _iso(practice.graded_at)
+    return state
+
+
+def _practice_from_state(state: dict[str, Any]) -> PracticeSession:
+    return PracticeSession(
+        **{
+            **state,
+            "created_at": _parse_datetime(state.get("created_at")) or datetime.now(timezone.utc),
+            "graded_at": _parse_datetime(state.get("graded_at")),
+        }
+    )
+
+
 def _result_state(result: GradingResult) -> dict[str, Any]:
     state = _asdict(result)
     state["graded_at"] = _iso(result.graded_at)
@@ -121,6 +138,7 @@ class Store:
         self.mastery: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.reports: dict[str, dict[str, Any]] = {}
         self.chat_quota: dict[str, dict[str, Any]] = {}
+        self.practices: dict[str, PracticeSession] = {}
         self.knowledge = LocalKnowledgeBase(settings)
         self.persistence_path = Path(settings.data_dir) / "store.json"
         self.persistence_enabled = settings.persistence_enabled
@@ -350,6 +368,7 @@ class Store:
                 "enrollments": [[course_id, user_id, class_name] for (course_id, user_id), class_name in self.enrollments.items()],
                 "questions": {key: _asdict(value) for key, value in self.questions.items()},
                 "quiz_sessions": {key: _quiz_state(value) for key, value in self.quiz_sessions.items()},
+                "practices": {key: _practice_state(value) for key, value in self.practices.items()},
                 "assignments": self.assignments,
                 "roll_calls": self.roll_calls,
                 "excel_schedules": self.excel_schedules,
@@ -409,6 +428,9 @@ class Store:
             self.questions = {key: Question(**value) for key, value in questions.items()}
             self.quiz_sessions = {
                 key: _quiz_from_state(value) for key, value in state.get("quiz_sessions", {}).items()
+            }
+            self.practices = {
+                key: _practice_from_state(value) for key, value in state.get("practices", {}).items()
             }
             self.assignments = dict(state.get("assignments", {}))
             self.roll_calls = list(state.get("roll_calls", []))
@@ -701,6 +723,14 @@ class Store:
             return False
         course = self.courses.get(target.requested_course_id or "")
         return course is not None and course.teacher_id == actor.id
+
+    def purge_practices(self, user_id: str) -> int:
+        """退出登录时清除该学生的全部 AI 练习记录,返回删除数量。"""
+        with self.lock:
+            doomed = [key for key, item in self.practices.items() if item.user_id == user_id]
+            for key in doomed:
+                self.practices.pop(key, None)
+            return len(doomed)
 
     def audit(
         self,

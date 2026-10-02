@@ -2376,5 +2376,176 @@ class SmokeTests(unittest.TestCase):
         )
 
 
+
+    # ===== AI 练习(practice) =====
+    PRACTICE_FAKE_JSON = {
+        "questions": [
+            {"type": "single_choice", "stem": "下列哪项属于可靠的审计证据？",
+             "options": ["银行询证函回函", "口头答复", "内部记账凭证", "未经核实的传闻"], "answer": 0,
+             "reference_answer": "银行询证函回函经银行确认,可靠性最高", "knowledge_points": ["审计证据可靠性"]},
+            {"type": "judge", "stem": "审计证据越多越好。", "answer": False,
+             "reference_answer": "证据需要适当与充分,并非越多越好", "knowledge_points": ["审计证据适当性"]},
+            {"type": "fill", "stem": "函证是获取______证据的重要程序。", "answer": "外部",
+             "reference_answer": "函证面向外部第三方获取书面证据", "knowledge_points": ["函证"]},
+        ]
+    }
+
+    class _PracticeFakeLLM:
+        configured = True
+
+        def __init__(self, settings, channel=None):
+            self.settings = settings
+            self.last_error = None
+            self.last_model = "fake-model"
+            self.last_request_sent = True
+            self.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}
+
+        async def complete_json_async(self, messages, temperature=0.2):
+            return json.loads(json.dumps(SmokeTests.PRACTICE_FAKE_JSON))
+
+    class _PracticeBrokenLLM(_PracticeFakeLLM):
+        def __init__(self, settings, channel=None):
+            super().__init__(settings, channel)
+            self.last_error = "rate_limited"
+            self.last_request_sent = True
+
+        async def complete_json_async(self, messages, temperature=0.2):
+            return None
+
+    def _seed_practice_history(self, count: int = 3) -> None:
+        store = self.app.state.store
+        student = store.find_user_by_username("stu001")
+        for index in range(count):
+            store.chat_history.append({
+                "id": f"chat-seed-{index}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "important": False,
+                "user_id": student.id,
+                "course_id": "audit-101",
+                "question": f"审计证据相关问题{index}",
+                "response": {"answer_markdown": "x", "sections": {}, "mind_map": [], "sources": [], "degraded": False, "degraded_reason": None},
+            })
+
+    def test_practice_generate_answer_and_history_flow(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            generated = self.client.post("/api/practice/generate", json={"course_id": "audit-101", "count": 3})
+        self.assertEqual(generated.status_code, 200)
+        body = generated.json()
+        self.assertEqual(len(body["questions"]), 3)
+        self.assertEqual(body["status"], "ongoing")
+        for question in body["questions"]:
+            self.assertNotIn("answer", question)
+        practice_id = body["id"]
+
+        listed = self.client.get("/api/practice").json()
+        self.assertEqual([item["id"] for item in listed], [practice_id])
+        self.assertEqual(listed[0]["question_count"], 3)
+        self.assertEqual(listed[0]["status"], "ongoing")
+
+        first_question = body["questions"][0]
+        wrong = self.client.post(f"/api/practice/{practice_id}/submit", json={"answers": {first_question["id"]: "乱写"}})
+        self.assertEqual(wrong.status_code, 200)
+        self.assertEqual(wrong.json()["result"]["total"], 0)
+        self.assertEqual(wrong.json()["status"], "graded")
+        duplicate = self.client.post(f"/api/practice/{practice_id}/submit", json={"answers": {}})
+        self.assertEqual(duplicate.status_code, 409)
+
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            second = self.client.post("/api/practice/generate", json={"course_id": "audit-101", "count": 3})
+        second_id = second.json()["id"]
+        stored = self.app.state.store.practices[second_id]
+        correct_answers = {question["id"]: question["answer"] for question in stored.questions}
+        right = self.client.post(f"/api/practice/{second_id}/submit", json={"answers": correct_answers})
+        self.assertEqual(right.status_code, 200)
+        self.assertEqual(right.json()["result"]["total"], right.json()["result"]["max_total"])
+        self.assertEqual(self.client.get(f"/api/practice/{second_id}").json()["status"], "graded")
+
+        unknown = self.client.post("/api/practice/fake-id/submit", json={"answers": {}})
+        self.assertEqual(unknown.status_code, 404)
+
+    def test_practice_generate_requires_chat_history(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            response = self.client.post("/api/practice/generate", json={"count": 3})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "no_chat_history")
+
+    def test_practice_generate_model_failure_returns_503(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        with patch("app.routers.practice.LLMClient", self._PracticeBrokenLLM):
+            response = self.client.post("/api/practice/generate", json={"count": 3})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "model_rate_limited")
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            retry = self.client.post("/api/practice/generate", json={"count": 3})
+        self.assertEqual(retry.status_code, 200)
+
+    def test_practice_generate_consumes_chat_quota(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        store = self.app.state.store
+        object.__setattr__(store.settings, "chat_daily_limit", 2)
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            self.assertEqual(self.client.post("/api/practice/generate", json={"count": 3}).status_code, 200)
+            self.assertEqual(self.client.post("/api/practice/generate", json={"count": 3}).status_code, 200)
+            third = self.client.post("/api/practice/generate", json={"count": 3})
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["code"], "chat_quota_exceeded")
+
+    def test_practice_ownership_is_enforced(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            generated = self.client.post("/api/practice/generate", json={"course_id": "audit-101", "count": 3})
+        practice_id = generated.json()["id"]
+
+        rival_username = f"stu-rival-{int(time.time()) % 100000}"
+        admin_client = TestClient(self.app)
+        admin_client.post("/api/auth/login", json={"username": "admin", "password": "admin123*", "role": "admin"})
+        admin_client.post("/api/admin/users", json={
+            "username": rival_username, "display_name": "对手学生", "password": "rival-pass*1",
+            "role": "student", "student_number": f"R{int(time.time()) % 100000}",
+        })
+        rival_client = TestClient(self.app)
+        rival_client.post("/api/auth/login", json={"username": rival_username, "password": "rival-pass*1", "role": "student"})
+
+        self.assertEqual(rival_client.get(f"/api/practice/{practice_id}").status_code, 404)
+        self.assertEqual(rival_client.post(f"/api/practice/{practice_id}/submit", json={"answers": {}}).status_code, 404)
+        self.assertEqual(rival_client.delete(f"/api/practice/{practice_id}").status_code, 404)
+        self.assertEqual(rival_client.get("/api/practice").json(), [])
+
+    def test_practice_delete_and_clear(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            first = self.client.post("/api/practice/generate", json={"count": 3}).json()
+            second = self.client.post("/api/practice/generate", json={"count": 3}).json()
+        self.assertEqual(len(self.client.get("/api/practice").json()), 2)
+        self.assertEqual(self.client.delete(f"/api/practice/{first['id']}").status_code, 204)
+        self.assertEqual([item["id"] for item in self.client.get("/api/practice").json()], [second["id"]])
+        cleared = self.client.delete("/api/practice")
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.json()["deleted"], 1)
+        self.assertEqual(self.client.get("/api/practice").json(), [])
+
+    def test_logout_purges_practice_history(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self._seed_practice_history()
+        with patch("app.routers.practice.LLMClient", self._PracticeFakeLLM):
+            self.client.post("/api/practice/generate", json={"count": 3})
+        self.client.post("/api/auth/logout")
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        self.assertEqual(self.client.get("/api/practice").json(), [])
+        self.assertTrue(any(item["action"] == "practice_purge_on_logout" for item in self.app.state.store.audit_logs))
+
+    def test_teacher_cannot_generate_practice(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*", "role": "teacher"})
+        response = self.client.post("/api/practice/generate", json={"count": 3})
+        self.assertEqual(response.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

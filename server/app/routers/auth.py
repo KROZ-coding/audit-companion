@@ -123,6 +123,10 @@ def register(payload: RegisterRequest, request: Request, store: Store = Depends(
 def logout(response: Response, request: Request, store: Store = Depends(get_store)) -> None:
     sid = request.cookies.get("sid")
     session = store.pop_session(sid or "")
+    if session:
+        purged = store.purge_practices(session[0])
+        if purged:
+            store.audit("practice_purge_on_logout", session[0], {"deleted": purged})
     store.audit("logout", session[0] if session else None, ip=request.client.host if request.client else None)
     response.delete_cookie("sid")
 

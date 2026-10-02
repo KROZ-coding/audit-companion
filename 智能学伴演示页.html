@@ -448,6 +448,27 @@ html.dark .note{background:#22304f}
   </div>
 </section>
 
+<!-- AI 练习(学生):依据答疑记录生成 -->
+<section class="panel" id="p1b">
+  <div class="card">
+    <div class="card-head-row">
+      <div><h2>🧠 AI 练习</h2>
+      <p class="desc">根据你在「学习答疑」里向 AI 提问的内容生成专属练习并判分;练习记录只保留在本账号下,退出登录自动清空。</p></div>
+    </div>
+    <div class="btnrow">
+      <label for="practiceCourse" style="font-size:12px;color:var(--muted)">课程</label>
+      <select id="practiceCourse" style="min-width:180px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text)"></select>
+      <button class="btn primary" id="practiceGenBtn" onclick="generatePractice()">✨ 依据答疑记录生成练习</button>
+    </div>
+    <p class="desc" id="practiceMsg" style="display:none"></p>
+    <div id="practiceArea"></div>
+    <div class="btnrow" id="practiceSubmitRow" style="display:none">
+      <button class="btn primary" id="practiceSubmitBtn" onclick="submitPractice()">提交练习</button>
+    </div>
+    <div id="practiceHistory"></div>
+  </div>
+</section>
+
 <!-- 测验与批改（学生作答 / 教师批改中心） -->
 <section class="panel" id="p2">
   <div class="card" id="p2Student">
@@ -1179,7 +1200,7 @@ document.querySelectorAll('.theme-btn').forEach(b=>b.onclick=e=>switchTheme(e,b)
 let ROLE='student';
 const ROLES={
   student:{face:'👨‍🎓',label:'学生',roleCls:'',labelWord:'姓名 / 学号',home:'p1',
-    tabs:[['学','p1','💬','学习答疑'],['学','p2','📝','随堂测验'],['学','p7','🕸️','三大图谱'],['学','p11','🧭','课程思政地图'],['学','p3','📊','我的学情报告']]},
+    tabs:[['学','p1','💬','学习答疑'],['学','p1b','🧠','AI 练习'],['学','p2','📝','随堂测验'],['学','p7','🕸️','三大图谱'],['学','p11','🧭','课程思政地图'],['学','p3','📊','我的学情报告']]},
   teacher:{face:'👩‍🏫',label:'教师',roleCls:'teacher',labelWord:'姓名 / 工号',home:'p13',
     tabs:[['教','p13','👥','学生管理'],['教','p2','🧮','测验与批改'],['教','p5','📋','答疑记录'],['教','p8','🧾','题库审查'],['教','p9','📥','资料库导入'],['教','p12','✅','注册审核'],['教','p14','🗃️','数据归档'],['教','p11','🧭','课程思政地图'],['教','p4','🎯','课堂点名'],['教','p3','📊','班级学情']]},
   admin:{face:'🛡️',label:'超级管理员',roleCls:'admin',labelWord:'管理员账号',home:'p6',
@@ -1264,6 +1285,7 @@ function switchPanel(btn){
   window.scrollTo({top:0,behavior:'smooth'});
   if(btn.dataset.p==='p13')loadStudentDirectory();
   if(btn.dataset.p==='p14')loadExcelArchiveTools();
+  if(btn.dataset.p==='p1b')renderPracticePage();
 }
 /* Reload after server-side revocation so cached role data and pending requests are discarded. */
 document.getElementById('logoutBtn').onclick=async event=>{
@@ -1931,6 +1953,117 @@ async function submitQuiz(){
      showGrades(area,{rows,total,max},finalResult.status==='needs_review'?'已提交，等待教师复核':'本次测验');
     area.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(error){showApiError(area,error.message||'提交失败');button.disabled=false;}
+}
+/* ===== P1b AI 练习 ===== */
+let PRACTICE=null;let PRACTICE_QUESTIONS=[];let practiceAns={};
+async function renderPracticePage(){
+  PRACTICE=null;PRACTICE_QUESTIONS=[];practiceAns={};
+  document.getElementById('practiceArea').innerHTML='';
+  document.getElementById('practiceSubmitRow').style.display='none';
+  document.getElementById('practiceMsg').style.display='none';
+  try{
+    const courses=await apiRequest('/api/courses');
+    const selector=document.getElementById('practiceCourse');
+    if(selector){
+      selector.innerHTML=courses.map(course=>`<option value="${escapeHtml(course.id)}">${escapeHtml(course.name)} · ${escapeHtml(course.term)}</option>`).join('');
+      if(LIVE_COURSE_ID&&courses.some(course=>course.id===LIVE_COURSE_ID))selector.value=LIVE_COURSE_ID;
+    }
+  }catch(error){/* 课程加载失败不阻断历史展示 */}
+  await loadPracticeHistory();
+}
+async function loadPracticeHistory(){
+  const area=document.getElementById('practiceHistory');
+  try{
+    const items=await apiRequest('/api/practice');
+    if(!items.length){area.innerHTML='<p class="desc" style="margin-top:10px">暂无练习记录。先去「学习答疑」向 AI 提问,再点上方按钮生成练习。</p>';return;}
+    const rows=items.map(item=>{
+      const source=(item.source_questions||[]).slice(0,2).map(aShort).map(escapeHtml).join(' / ')||'—';
+      const score=item.status==='graded'?`<span class="pill ok">${item.total} / ${item.max_total} 分</span>`:`<span class="pill mid">待完成</span>`;
+      return `<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(formatShortDate(item.created_at))} · ${item.question_count} 题 ${score}</div><div class="qa-meta">依据:${source}</div></div><div class="qa-action"><button class="btn sm ghost" onclick="viewPractice('${escapeHtml(item.id)}')">${item.status==='graded'?'查看':'继续作答'}</button> <button class="btn sm ghost" onclick="deletePractice('${escapeHtml(item.id)}')">删除</button></div></div>`;
+    }).join('');
+    area.innerHTML=`<div style="margin-top:14px"><div class="card-head-row"><h3>📚 练习历史</h3><button class="btn sm ghost" onclick="clearPracticeHistory()">🧹 清空全部</button></div>${rows}</div>`;
+  }catch(error){area.innerHTML=`<p class="desc">历史加载失败:${escapeHtml(error.message||'')}</p>`;}
+}
+async function generatePractice(){
+  const button=document.getElementById('practiceGenBtn');const msg=document.getElementById('practiceMsg');
+  button.disabled=true;msg.style.display='block';msg.textContent='正在根据你的答疑记录出题,大约需要十几秒…';
+  document.getElementById('practiceArea').innerHTML='';document.getElementById('practiceSubmitRow').style.display='none';
+  try{
+    const data=await apiRequest('/api/practice/generate',{method:'POST',body:JSON.stringify({course_id:document.getElementById('practiceCourse')?.value||null,count:3})});
+    msg.textContent=`已生成 ${data.questions.length} 道题,作答后提交立即判分。`;
+    renderPracticeSession(data);
+    await loadPracticeHistory();
+  }catch(error){msg.textContent='生成失败:'+(error.message||'');}
+  finally{button.disabled=false;}
+}
+function renderPracticeSession(data){
+  PRACTICE=data;PRACTICE_QUESTIONS=data.questions||[];practiceAns={...(data.answers||{})};
+  const area=document.getElementById('practiceArea');
+  area.innerHTML=PRACTICE_QUESTIONS.map(q=>`
+    <div class="qcard">
+      <div class="qh"><span class="tag">${q.type==='single_choice'?'单选题':q.type==='multi_choice'?'多选题':q.type==='judge'?'判断题':'填空题'}</span><span class="score">${q.score} 分</span></div>
+      <div class="stem">${escapeHtml(q.stem)}</div>
+      ${q.type==='fill'?`<input id="pta-${q.id}" type="text" placeholder="输入你的答案…" oninput="practiceAns['${q.id}']=this.value">`:q.type==='judge'?`<div class="opts"><label><input type="radio" name="pr-${q.id}" value="true" onchange="pickJudgeP('${q.id}',true)"><span>正确</span></label><label><input type="radio" name="pr-${q.id}" value="false" onchange="pickJudgeP('${q.id}',false)"><span>错误</span></label></div>`:`<div class="opts">${(q.options||[]).map((option,i)=>`<label><input type="${q.type==='single_choice'?'radio':'checkbox'}" name="pr-${q.id}" value="${i}" onchange="pickP('${q.id}',${i},this.checked)"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`}
+    </div>`).join('');
+  PRACTICE_QUESTIONS.forEach(question=>{
+    const saved=practiceAns[question.id];
+    if(question.type==='fill'){const input=document.getElementById('pta-'+question.id);if(input)input.value=String(saved??'');}
+    else if(question.type==='judge'){area.querySelectorAll('input').forEach(input=>{if(input.name==='pr-'+question.id)input.checked=input.value===String(saved);});}
+    else{const selected=new Set((Array.isArray(saved)?saved:saved===undefined?[]:[saved]).map(String));area.querySelectorAll('input').forEach(input=>{if(input.name==='pr-'+question.id)input.checked=selected.has(input.value);});}
+  });
+  const graded=PRACTICE.status==='graded';
+  document.getElementById('practiceSubmitRow').style.display=graded?'none':'block';
+  document.getElementById('practiceSubmitBtn').disabled=graded;
+  if(graded&&PRACTICE.result)renderPracticeResult(PRACTICE.result);
+}
+function pickP(id,index,checked){
+  const question=PRACTICE_QUESTIONS.find(item=>item.id===id);if(!question)return;
+  if(question.type==='single_choice')practiceAns[id]=index;
+  else{practiceAns[id]=practiceAns[id]||[];practiceAns[id]=checked?[...new Set([...practiceAns[id],index])]:practiceAns[id].filter(value=>value!==index);}
+}
+function pickJudgeP(id,value){practiceAns[id]=value;}
+async function submitPractice(){
+  if(!PRACTICE)return;
+  const answers={...practiceAns};PRACTICE_QUESTIONS.forEach(q=>{if(q.type==='fill')answers[q.id]=document.getElementById('pta-'+q.id)?.value||'';});
+  const button=document.getElementById('practiceSubmitBtn');button.disabled=true;
+  try{
+    const data=await apiRequest(`/api/practice/${PRACTICE.id}/submit`,{method:'POST',body:JSON.stringify({answers})});
+    renderPracticeSession(data);
+    await loadPracticeHistory();
+  }catch(error){showApiError(document.getElementById('practiceArea'),error.message||'提交失败');button.disabled=false;}
+}
+function renderPracticeResult(result){
+  const rows=result.per_question.map(item=>{
+    const question=PRACTICE_QUESTIONS.find(q=>q.id===item.question_id);
+    const cls=item.correct?'g-ok':'g-bad';
+    const yourAnswer=escapeHtml(answerText(question||{},item.your_answer));
+    let stdAnswer=String(item.answer??'');
+    if(question&&question.type==='judge')stdAnswer=item.answer?'正确':'错误';
+    else if(question&&question.type==='single_choice'&&question.options?.[item.answer]!==undefined)stdAnswer=question.options[item.answer];
+    else if(question&&question.type==='multi_choice'&&Array.isArray(item.answer))stdAnswer=item.answer.map(i=>question.options?.[i]??i).join('；');
+    stdAnswer=escapeHtml(stdAnswer);
+    return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(question?.stem||item.question_id)}</span><span>${item.score} / ${item.max_score} 分</span></div><div class="why">✦ 你的答案:${yourAnswer}</div><div class="why">✦ 标准答案:${stdAnswer}</div>${item.reference_answer?`<div class="why">✦ 解析:${escapeHtml(item.reference_answer)}</div>`:''}</div>`;
+  }).join('');
+  document.getElementById('practiceArea').insertAdjacentHTML('beforeend',`<div style="margin-top:12px">${rows}<div class="grade g-ok"><div class="gh"><span>本次练习</span><span>${result.total} / ${result.max_total} 分</span></div></div></div>`);
+}
+async function viewPractice(id){
+  const area=document.getElementById('practiceArea');
+  area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('practiceSubmitRow').style.display='none';
+  try{renderPracticeSession(await apiRequest(`/api/practice/${encodeURIComponent(id)}`));}
+  catch(error){showApiError(area,error.message||'加载失败');}
+}
+async function deletePractice(id){
+  try{await apiRequest(`/api/practice/${encodeURIComponent(id)}`,{method:'DELETE'});await loadPracticeHistory();}
+  catch(error){alert(error.message||'删除失败');}
+}
+async function clearPracticeHistory(){
+  if(!confirm('确定清空全部练习记录?此操作不可恢复。'))return;
+  try{
+    await apiRequest('/api/practice',{method:'DELETE'});
+    PRACTICE=null;PRACTICE_QUESTIONS=[];practiceAns={};
+    document.getElementById('practiceArea').innerHTML='';document.getElementById('practiceSubmitRow').style.display='none';
+    await loadPracticeHistory();
+  }catch(error){alert(error.message||'清空失败');}
 }
 /* ===== 教师 / 管理员 API 适配 ===== */
 function statusPill(status){

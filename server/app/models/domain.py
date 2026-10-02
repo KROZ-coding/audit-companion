@@ -84,3 +84,19 @@ class GradingResult:
     submitted_answers: dict[str, Any] = field(default_factory=dict)
     graded_by: str = "rule"
     graded_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass(slots=True)
+class PracticeSession:
+    """AI 根据学生答疑记录生成的随练,退出登录时整体清除。"""
+
+    id: str
+    user_id: str
+    course_id: str | None
+    created_at: datetime = field(default_factory=utcnow)
+    source_questions: list[str] = field(default_factory=list)
+    questions: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "ongoing"
+    answers: dict[str, Any] = field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    graded_at: datetime | None = None

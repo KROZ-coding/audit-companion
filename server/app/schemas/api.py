@@ -174,6 +174,46 @@ class QuizDraftRequest(BaseModel):
     answers: dict[str, Any]
 
 
+class PracticeGenerateRequest(BaseModel):
+    course_id: str | None = None
+    count: int = Field(default=3, ge=1, le=8)
+
+
+class PracticeQuestionOut(BaseModel):
+    id: str
+    type: str
+    stem: str
+    options: list[str] = Field(default_factory=list)
+    score: int
+    knowledge_points: list[str] = Field(default_factory=list)
+
+
+class PracticeListItemOut(BaseModel):
+    id: str
+    created_at: datetime
+    course_id: str | None = None
+    status: str
+    question_count: int
+    total: float | None = None
+    max_total: float = 0
+    source_questions: list[str] = Field(default_factory=list)
+
+
+class PracticeDetailOut(BaseModel):
+    id: str
+    status: str
+    course_id: str | None = None
+    created_at: datetime
+    source_questions: list[str] = Field(default_factory=list)
+    questions: list[PracticeQuestionOut]
+    answers: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+
+
+class PracticeSubmitRequest(BaseModel):
+    answers: dict[str, Any]
+
+
 class QuizSubmitRequest(BaseModel):
     answers: dict[str, Any]
 
