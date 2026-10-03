@@ -326,6 +326,27 @@ html.dark .note{background:#22304f}
 @media (max-width:600px){.summary-grid{grid-template-columns:1fr 1fr}.course-switch{max-width:145px;min-width:110px}.dialog-head,.dialog-body{padding-left:14px;padding-right:14px}}
 @media (max-width:860px){.wrap{grid-template-columns:1fr}nav{position:static}.rep{grid-template-columns:1fr}.roster{grid-template-columns:repeat(4,1fr)}
   header.sh .demo-tag{display:none}.userchip .uname{display:none}.graphs-row{grid-template-columns:1fr}}
+/* 移动端适配:窄屏禁止横向溢出,表格横向滚动,输入与按钮行自适应收缩 */
+@media (max-width:860px){
+  html,body{max-width:100%;overflow-x:hidden}
+  .wrap{padding:0 10px;gap:10px}
+  .card{padding:12px;min-width:0}
+  .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .table-scroll table{min-width:560px}
+  .btnrow{flex-wrap:wrap;gap:8px}
+  .btnrow input,.btnrow select,.btnrow textarea{flex:1 1 140px;min-width:0;width:auto}
+  .chat{max-height:55vh}
+  .quick{flex-wrap:wrap}
+  .student-controls{flex-wrap:wrap;gap:8px}
+  .student-controls select,.student-controls input{flex:1 1 120px;min-width:0}
+  header.sh{padding:8px 10px;flex-wrap:wrap;gap:6px}
+}
+@media (max-width:560px){
+  nav{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:4px;padding:6px}
+  nav button{flex:0 0 auto;white-space:nowrap;padding:7px 10px;font-size:12.5px}
+  nav .tip{display:none}
+  .btnrow .btn{flex:1 1 auto}
+}
 @media (max-width:560px){.roster{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
@@ -561,10 +582,13 @@ html.dark .note{background:#22304f}
     <p class="desc">按学生或问题检索答疑记录；重点标记会保留。</p>
     <div class="qa-controls">
       <input id="qaSearch" type="search" placeholder="搜索学生、学号或问题" oninput="renderQaTable()">
+      <select id="qaTimeFilter" onchange="renderQaTable()" style="min-height:30px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px">
+        <option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option>
+      </select>
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)"><input id="qaImportantOnly" type="checkbox" onchange="renderQaTable()">仅重点</label>
     </div>
     <table>
-      <thead><tr><th style="width:150px">学生</th><th>问题</th><th style="width:120px">助教回答</th><th style="width:140px">操作</th></tr></thead>
+      <thead><tr><th style="width:150px">学生</th><th style="width:110px">时间</th><th>问题</th><th style="width:120px">助教回答</th><th style="width:140px">操作</th></tr></thead>
       <tbody id="qaTable"></tbody>
     </table>
   </div>
@@ -1303,14 +1327,23 @@ function renderQaTable(){
   const table=document.getElementById('qaTable');if(!table)return;
   const query=(document.getElementById('qaSearch')?.value||'').trim().toLowerCase();
   const importantOnly=document.getElementById('qaImportantOnly')?.checked;
+  const timeFilter=document.getElementById('qaTimeFilter')?.value||'all';
+  const now=Date.now();
   const rows=QA_LOG.map((item,index)=>({item,index})).filter(({item})=>{
     const answer=item.response?.answer_markdown||item.a||'';
-    return(!importantOnly||item.key)&&(!query||`${item.stu} ${item.student_number||''} ${item.q} ${answer}`.toLowerCase().includes(query));
+    if(importantOnly&&!item.key)return false;
+    if(timeFilter!=='all'&&item.created_at){
+      const age=now-new Date(item.created_at).getTime();
+      if(timeFilter==='today'&&age>86400000)return false;
+      if(timeFilter==='week'&&age>7*86400000)return false;
+    }
+    return !query||`${item.stu} ${item.student_number||''} ${item.q} ${answer}`.toLowerCase().includes(query);
   });
   table.innerHTML=rows.map(({item:x,index:i})=>`<tr>
     <td>${x.user_id?`<button class="btn sm ghost" onclick="openStudentDetail('${escapeHtml(x.user_id)}','${escapeHtml(x.course_id||'')}')">${escapeHtml(x.stu)}</button>`:escapeHtml(x.stu)}<br><small style="color:var(--muted)">${escapeHtml(x.student_number||x.course_name||'')}</small></td>
+    <td style="white-space:nowrap;color:var(--muted);font-size:11.5px">${escapeHtml(formatShortDate(x.created_at))}</td>
     <td>${escapeHtml(x.q)}</td><td><button class="btn sm ghost" onclick="showQaAnswer(${i})">查看回答</button></td>
-    <td><button class="btn sm ghost" onclick="markKey(this,${i})">${x.key?'★ 已标记':'标记重点'}</button></td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">没有匹配的答疑记录</td></tr>';
+    <td><button class="btn sm ghost" onclick="markKey(this,${i})">${x.key?'★ 已标记':'标记重点'}</button></td></tr>`).join('')||'<tr><td colspan="5" style="color:var(--muted)">没有匹配的答疑记录</td></tr>';
 }
 function showQaAnswer(i){
   const item=QA_LOG[i];if(!item)return;
@@ -1776,11 +1809,16 @@ async function bootAuth(){
   }catch(error){}
 }
 
+let ASK_IN_FLIGHT=false;
 async function ask(q){
   q=String(q||'').trim();if(!q)return;
+  if(ASK_IN_FLIGHT)return;
+  ASK_IN_FLIGHT=true;
+  const sendButton=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='发送');
+  if(sendButton){sendButton.disabled=true;sendButton.textContent='回答中…';}
   const chat=document.getElementById('chat1');
   const typingId='typing-'+Date.now();
-  chat.insertAdjacentHTML('beforeend',`<div class="msg user">${escapeHtml(q)}</div><div class="typing" id="${typingId}"><i></i><i></i><i></i></div>`);
+  chat.insertAdjacentHTML('beforeend',`<div class="msg user">${escapeHtml(q)}</div><div class="typing" id="${typingId}"><i></i><i></i><i></i></div><div class="msg bot hint" style="color:var(--muted);font-size:12px">正在检索课程资料并生成回答,通常需要 20~90 秒,请稍候…</div>`);
   chat.scrollTop=chat.scrollHeight;
   try{
     const data=await apiRequest('/api/chat/ask',{method:'POST',body:JSON.stringify({question:q,course_id:LIVE_COURSE_ID})});
@@ -1805,6 +1843,11 @@ async function ask(q){
     QA_LOG.unshift({stu:CURRENT.name||'我',q:aShort(q),a:degradedNotice||'知识库检索 + 模型回答',n:QA_LOG.length+1});
     if(ROLES[CURRENT.role]&&CURRENT.role!=='student')renderQaTable();
   }catch(error){document.getElementById(typingId)?.remove();chat.insertAdjacentHTML('beforeend',`<div class="msg bot">${escapeHtml(error.message||'答疑请求失败')}</div>`);}
+  finally{
+    document.querySelectorAll('#chat1 .msg.hint').forEach(x=>x.remove());
+    ASK_IN_FLIGHT=false;
+    if(sendButton){sendButton.disabled=false;sendButton.textContent='发送';}
+  }
   chat.scrollTop=chat.scrollHeight;
 }
 
