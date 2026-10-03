@@ -1,7 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import asdict
 from io import BytesIO
 import json
@@ -245,9 +245,26 @@ class Store:
     def add_question(self, question: Question) -> None:
         self.questions[question.id] = question
 
+    def _prune_expired_sessions_locked(self) -> None:
+        """save() 前清扫:过期登录会话 + 超期未提交的随机练习会话(长期运行防无界增长)。"""
+        now = time.time()
+        expired = [sid for sid, session in self.sessions.items() if session[1] <= now]
+        for sid in expired:
+            del self.sessions[sid]
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        stale = [
+            sid for sid, session in self.quiz_sessions.items()
+            if not session.assigned and session.status == "ongoing"
+            and session.started_at < cutoff
+        ]
+        for sid in stale:
+            del self.quiz_sessions[sid]
+
     def save(self) -> bool:
         if not self.persistence_enabled:
             return True
+        with self.lock:
+            self._prune_expired_sessions_locked()
         temporary = self.persistence_path.with_name(f".{self.persistence_path.name}.{uuid4().hex}.tmp")
         try:
             with self._save_lock:

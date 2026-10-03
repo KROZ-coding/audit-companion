@@ -13,6 +13,8 @@ from ..store import Store
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+CHAT_HISTORY_PER_USER = 200  # 单用户答疑历史上限,长期运行防膨胀
+
 MODEL_FAILURE_REASONS = {
     "not_configured": "model_unconfigured",
     "http_error": "model_http_error",
@@ -101,6 +103,10 @@ async def ask(
         completion_tokens=token_usage["completion_tokens"],
     )
     with store.lock:
+        mine = [item for item in store.chat_history if item["user_id"] == user.id]
+        if len(mine) >= CHAT_HISTORY_PER_USER:
+            drop_ids = {item["id"] for item in mine[:len(mine) - CHAT_HISTORY_PER_USER + 1]}
+            store.chat_history[:] = [item for item in store.chat_history if item["id"] not in drop_ids]
         store.chat_history.append({
             "id": str(uuid4()),
             "created_at": datetime.now(timezone.utc).isoformat(),
