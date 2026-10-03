@@ -269,6 +269,10 @@ def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
         pending = sum(1 for r in results if r.status == "needs_review")
         asks = [c for c in store.chat_history if c.get("user_id") == student.id and c.get("course_id") == course_id]
         last_ask = asks[-1]["created_at"][:16].replace("T", " ") if asks else None
+        recent_questions = [
+            {"time": c.get("created_at", "")[:16].replace("T", " "), "question": str(c.get("question") or "")[:60]}
+            for c in asks[-3:]
+        ]
         roster.append({
             "name": student.display_name, "username": student.username,
             "quiz_count": len(graded),
@@ -276,6 +280,7 @@ def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
             "pending_review": pending,
             "ask_count": len(asks),
             "last_ask": last_ask,
+            "recent_questions": recent_questions,
         })
     mastery: dict[str, list[float]] = {}
     for (uid, mid, point), value in store.mastery.items():

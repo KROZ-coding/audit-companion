@@ -542,20 +542,7 @@ html.dark .note{background:#22304f}
     </div>
     <div id="repArea" style="display:none"></div>
     <div id="historyArea" style="margin-top:14px"></div>
-    <div id="aiInsightBox" style="display:none;margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
-      <h3 style="font-size:13.5px;margin:0 0 8px">🤖 AI 学情问答 <small style="color:var(--muted);font-weight:400">用自然语言问本班数据,如"张伟今天答疑问了什么"或"哪些学生需要关注"</small></h3>
-      <div class="btnrow">
-        <input id="aiInsightInput" placeholder="问点本班学情,如:最近谁没来答疑?哪些知识点最薄弱?" style="flex:1" onkeydown="if(event.key==='Enter')askInsight()">
-        <button class="btn primary" id="aiInsightBtn" onclick="askInsight()">🔍 问助教</button>
-      </div>
-      <div id="aiInsightChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
-        <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验完成度最低?')">完成度最低的学生</button>
-        <button class="btn sm ghost" onclick="aiInsightQuick('哪些知识点最薄弱,建议怎么补?')">薄弱知识点</button>
-        <button class="btn sm ghost" onclick="aiInsightQuick('最近有哪些学生提交了答疑?问了什么?')">今日答疑概况</button>
-        <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验待我复核?')">待复核名单</button>
-      </div>
-      <div id="aiInsightOut"></div>
-    </div>
+
   </div>
 </section>
 
@@ -787,9 +774,9 @@ html.dark .note{background:#22304f}
       <p class="desc">导入 PDF / DOCX / Markdown 资料；大批量资料请用 build_knowledge_index.py 建立本地索引</p></div>
     </div>
     <div class="import-row">
-      <input type="text" id="docName" placeholder="资料名称（如：审计学教材第4章）" style="flex:1">
+      <input type="text" id="docName" placeholder="资料名称（如：审计学教材第4章）" style="flex:1;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
       <input type="file" id="docFile" accept=".pdf,.docx,.md" style="max-width:210px;font-size:12px">
-      <select id="docTarget" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px">
+      <select id="docTarget" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
         <option>audit_textbook · 教材讲义</option>
         <option>audit_standards · 审计准则</option>
         <option>audit_cases · 审计案例</option>
@@ -798,15 +785,15 @@ html.dark .note{background:#22304f}
       <button class="btn primary" onclick="importDoc()">＋ 导入资料</button>
     </div>
     <div class="import-row" style="margin-top:8px">
-      <input type="search" id="docSearch" placeholder="搜索文件名或来源路径" oninput="DOC_PAGE=1;renderDocuments()" style="flex:1">
-      <select id="docKbFilter" onchange="DOC_PAGE=1;renderDocuments()" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px">
+      <input type="search" id="docSearch" placeholder="搜索文件名或来源路径" oninput="DOC_PAGE=1;renderDocuments()" style="flex:1;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+      <select id="docKbFilter" onchange="DOC_PAGE=1;renderDocuments()" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
         <option value="">全部知识库</option>
         <option value="audit_textbook">教材讲义</option>
         <option value="audit_standards">审计准则</option>
         <option value="audit_cases">审计案例</option>
         <option value="cpa_question_bank">CPA题库</option>
       </select>
-      <select id="docPageSize" onchange="DOC_PAGE=1;renderDocuments()" style="padding:8px 10px;border:1.5px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13px"><option value="10">每页10</option><option value="20" selected>每页20</option><option value="50">每页50</option><option value="100">每页100</option></select>
+      <select id="docPageSize" onchange="DOC_PAGE=1;renderDocuments()" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px"><option value="10">每页10</option><option value="20" selected>每页20</option><option value="50">每页50</option><option value="100">每页100</option></select>
       <span id="docSummary" style="font-size:12px;color:var(--muted)">正在读取资料…</span>
     </div>
     <table style="margin-top:12px">
@@ -872,6 +859,26 @@ html.dark .note{background:#22304f}
       <span style="font-size:12px;color:var(--muted)">已选 <b id="studentSelectCount">0</b> 名学生</span>
       <button class="btn sm primary" onclick="useSelectedStudentsForAssignment()">用于布置测验</button>
     </div>
+  </div>
+</section>
+
+<!-- AI 学情问答（教师） -->
+<section class="panel" id="p15">
+  <div class="card">
+    <h2>🤖 AI 学情问答</h2>
+    <p class="desc">用自然语言问本班数据:学生进度、答疑动态、薄弱点、待复核 —— 数据全部来自服务端真实统计,教师仅能查询自己负责的课程。</p>
+    <div class="btnrow">
+      <input id="aiInsightInput" placeholder="例如:张伟今天答疑问了什么?哪些学生需要关注?" style="flex:1;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px" onkeydown="if(event.key==='Enter')askInsight()">
+      <button class="btn primary" id="aiInsightBtn" onclick="askInsight()">🔍 问助教</button>
+    </div>
+    <div id="aiInsightChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+      <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验完成度最低?')">完成度最低</button>
+      <button class="btn sm ghost" onclick="aiInsightQuick('哪些知识点最薄弱,建议怎么补?')">薄弱知识点</button>
+      <button class="btn sm ghost" onclick="aiInsightQuick('最近有哪些学生提交了答疑?分别问了什么?')">答疑概况</button>
+      <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验在等我复核?')">待复核名单</button>
+      <button class="btn sm ghost" onclick="aiInsightQuick('给全班写一段 50 字以内的学习提醒')">写学习提醒</button>
+    </div>
+    <div id="aiInsightOut"></div>
   </div>
 </section>
 
@@ -1242,7 +1249,7 @@ const ROLES={
   student:{face:'👨‍🎓',label:'学生',roleCls:'',labelWord:'姓名 / 学号',home:'p1',
     tabs:[['学','p1','💬','学习答疑'],['学','p1b','🧠','AI 练习'],['学','p2','📝','随堂测验'],['学','p7','🕸️','三大图谱'],['学','p11','🧭','课程思政地图'],['学','p3','📊','我的学情报告']]},
   teacher:{face:'👩‍🏫',label:'教师',roleCls:'teacher',labelWord:'姓名 / 工号',home:'p13',
-    tabs:[['教','p13','👥','学生管理'],['教','p2','🧮','测验与批改'],['教','p5','📋','答疑记录'],['教','p8','🧾','题库审查'],['教','p9','📥','资料库导入'],['教','p12','✅','注册审核'],['教','p14','🗃️','数据归档'],['教','p11','🧭','课程思政地图'],['教','p4','🎯','课堂点名'],['教','p3','📊','班级学情']]},
+    tabs:[['教','p13','👥','学生管理'],['教','p15','🤖','AI 问答'],['教','p2','🧮','测验与批改'],['教','p5','📋','答疑记录'],['教','p8','🧾','题库审查'],['教','p9','📥','资料库导入'],['教','p12','✅','注册审核'],['教','p14','🗃️','数据归档'],['教','p11','🧭','课程思政地图'],['教','p4','🎯','课堂点名'],['教','p3','📊','班级学情']]},
   admin:{face:'🛡️',label:'超级管理员',roleCls:'admin',labelWord:'管理员账号',home:'p6',
     tabs:[['管','p6','🛡️','平台管理（用户/题库/日志）'],['管','p12','✅','注册审核'],['管','p14','🗃️','数据归档']]}
 };
@@ -1326,7 +1333,7 @@ function switchPanel(btn){
   if(btn.dataset.p==='p13')loadStudentDirectory();
   if(btn.dataset.p==='p14')loadExcelArchiveTools();
   if(btn.dataset.p==='p1b')renderPracticePage();
-  if(btn.dataset.p==='p3'){const box=document.getElementById('aiInsightBox');if(box)box.style.display=CURRENT.role!=='student'?'block':'none';}
+  if(btn.dataset.p==='p15'&&CURRENT.role==='student'){const b=document.querySelector('#appNav button[data-p=\"p15\"]');if(b)b.style.display='none';}
 }
 /* Reload after server-side revocation so cached role data and pending requests are discarded. */
 document.getElementById('logoutBtn').onclick=async event=>{
