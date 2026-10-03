@@ -1,9 +1,12 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import get_current_user, get_store, require_roles
+from ..schemas.api import AiInsightRequest
 from ..models import User
+from ..services.llm_client import LLMClient
 from ..store import Store
 
 router = APIRouter(prefix="/api/progress", tags=["progress"])
@@ -250,3 +253,88 @@ def class_progress(course_id: str | None = None, user: User = Depends(require_ro
         "mastery": rows,
         "weak_points": weak_points,
     }
+
+
+def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
+    """按权限聚合课程数据快照(纯代码取数,模型只读摘要)。"""
+    course = store.courses[course_id]
+    students = store.students_for_course(course_id)
+    roster = []
+    for student in students:
+        sessions = [s for s in store.quiz_sessions.values() if s.user_id == student.id and s.course_id == course_id]
+        graded = [s for s in sessions if s.status in {"graded", "needs_review"}]
+        results = [store.results[s.id] for s in graded if s.id in store.results]
+        total_score = sum(r.total for r in results)
+        max_score = sum(r.max_total for r in results)
+        pending = sum(1 for r in results if r.status == "needs_review")
+        asks = [c for c in store.chat_history if c.get("user_id") == student.id and c.get("course_id") == course_id]
+        last_ask = asks[-1]["created_at"][:16].replace("T", " ") if asks else None
+        roster.append({
+            "name": student.display_name, "username": student.username,
+            "quiz_count": len(graded),
+            "score_ratio": round(total_score / max_score, 2) if max_score else None,
+            "pending_review": pending,
+            "ask_count": len(asks),
+            "last_ask": last_ask,
+        })
+    mastery: dict[str, list[float]] = {}
+    for (uid, mid, point), value in store.mastery.items():
+        if mid == course_id and value.get("attempts", 0) >= 2:
+            mastery.setdefault(point, []).append(value["mastery"])
+    weak_points = sorted(
+        ((point, round(sum(v) / len(v), 1)) for point, v in mastery.items() if sum(v) / len(v) < 60),
+        key=lambda item: item[1],
+    )[:6]
+    strong_points = sorted(
+        ((point, round(sum(v) / len(v), 1)) for point, v in mastery.items() if sum(v) / len(v) >= 80),
+        key=lambda item: -item[1],
+    )[:6]
+    return {
+        "course": f"{course.name} {course.term}",
+        "student_count": len(roster),
+        "students": roster,
+        "weak_points": weak_points,
+        "strong_points": strong_points,
+    }
+
+
+@router.post("/ai-insight")
+async def ai_insight(
+    payload: AiInsightRequest,
+    user: User = Depends(require_roles("teacher", "admin")),
+    store: Store = Depends(get_store),
+) -> dict:
+    """教师 AI 学情问答:预查数据 + 模型解读。教师只能问自己课程。"""
+    course_id = payload.course_id
+    if course_id not in store.courses:
+        raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "课程不存在"})
+    if not store.can_access_course(user, course_id, teaching=True):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程学情"})
+    if not store.reserve_chat_call(user.id):
+        store.audit("chat_quota_exceeded", user.id, {"intent": "ai_insight"})
+        raise HTTPException(status_code=429, detail={"code": "chat_quota_exceeded", "message": "今日 AI 次数已达上限"})
+    snapshot = _insight_snapshot(store, user, course_id)
+    if not snapshot["student_count"]:
+        raise HTTPException(status_code=409, detail={"code": "no_students", "message": "课程里还没有学生"})
+    prompt = (
+        f"你是《审计学》课程的教学助教。课程:{snapshot['course']},共 {snapshot['student_count']} 名学生。\n"
+        f"学生数据(JSON,含每人测验完成数、得分率、待复核数、答疑次数与最近提问时间):\n"
+        f"{json.dumps(snapshot['students'], ensure_ascii=False)}\n\n"
+        f"薄弱知识点(均分<60):{snapshot['weak_points'] or '无'}\n"
+        f"掌握较好知识点(均分≥80):{snapshot['strong_points'] or '无'}\n\n"
+        f"教师提问:{payload.question}\n\n"
+        "请直接回答教师的问题。要求:引用具体学生姓名和数据时必须来自上面 JSON,不得编造;"
+        "回答用简洁的中文,可用 Markdown 列表;不超过 400 字。"
+    )
+    client = LLMClient(store.settings, channel="teacher")
+    text = client.complete([{"role": "user", "content": prompt}], temperature=0.3)
+    usage = getattr(client, "last_usage", {"prompt_tokens": 0, "completion_tokens": 0})
+    model = getattr(client, "last_model", None) or store.settings.llm_model or "unconfigured"
+    if not text or not text.strip():
+        outcome = f"model_{getattr(client, 'last_error', None) or 'unavailable'}"
+        store.record_usage(user.id, "ai_insight", model, 0, outcome, course_id=course_id)
+        raise HTTPException(status_code=503, detail={"code": "model_unavailable", "message": "本次解读生成失败,请稍后重试"})
+    store.record_usage(user.id, "ai_insight", model, 0, "ok", course_id=course_id,
+                       prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"])
+    store.audit("ai_insight", user.id, {"course_id": course_id, "question": payload.question[:120]})
+    return {"answer_markdown": text.strip(), "snapshot_students": snapshot["student_count"]}

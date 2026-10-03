@@ -542,6 +542,20 @@ html.dark .note{background:#22304f}
     </div>
     <div id="repArea" style="display:none"></div>
     <div id="historyArea" style="margin-top:14px"></div>
+    <div id="aiInsightBox" style="display:none;margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
+      <h3 style="font-size:13.5px;margin:0 0 8px">🤖 AI 学情问答 <small style="color:var(--muted);font-weight:400">用自然语言问本班数据,如"张伟今天答疑问了什么"或"哪些学生需要关注"</small></h3>
+      <div class="btnrow">
+        <input id="aiInsightInput" placeholder="问点本班学情,如:最近谁没来答疑?哪些知识点最薄弱?" style="flex:1" onkeydown="if(event.key==='Enter')askInsight()">
+        <button class="btn primary" id="aiInsightBtn" onclick="askInsight()">🔍 问助教</button>
+      </div>
+      <div id="aiInsightChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+        <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验完成度最低?')">完成度最低的学生</button>
+        <button class="btn sm ghost" onclick="aiInsightQuick('哪些知识点最薄弱,建议怎么补?')">薄弱知识点</button>
+        <button class="btn sm ghost" onclick="aiInsightQuick('最近有哪些学生提交了答疑?问了什么?')">今日答疑概况</button>
+        <button class="btn sm ghost" onclick="aiInsightQuick('哪些学生的测验待我复核?')">待复核名单</button>
+      </div>
+      <div id="aiInsightOut"></div>
+    </div>
   </div>
 </section>
 
@@ -744,6 +758,8 @@ html.dark .note{background:#22304f}
         <option value="all">全部状态</option><option value="draft">草稿</option><option value="reviewing">待审</option><option value="published">已发布</option><option value="retired">已下架</option>
       </select>
       <select id="bankKpFilter" onchange="BANK_PAGE=1;renderBankTable()" style="max-width:180px;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px"><option value="">全部知识点</option></select>
+      <button class="btn sm ghost" onclick="quickPickForQuiz()" title="按当前筛选自动选一组已发布题(约 10 题,覆盖所选知识点)" style="min-height:32px">⚡ 智能选题</button>
+      <button class="btn sm ghost" onclick="clearBankSelection()" title="清空已勾选题目" style="min-height:32px">清空选题</button>
     </div>
     <table>
       <thead><tr><th style="width:36px"><input type="checkbox" id="bankSelectAll" onchange="toggleSelectAll(this)" title="全选已发布"></th><th>题目编号</th><th>题干 / 知识点</th><th>难度</th><th>状态</th><th style="width:230px">操作</th></tr></thead>
@@ -869,9 +885,9 @@ html.dark .note{background:#22304f}
       <button class="btn primary" onclick="createExcelSnapshot()">⬇ 生成并下载 Excel</button>
     </div>
     <div class="student-toolbar">
-      <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="excelScheduleEnabled" onchange="saveExcelSchedule()">定期自动保存</label>
-      <select id="excelScheduleInterval" aria-label="自动保存间隔" onchange="saveExcelSchedule()">
-        <option value="24">每天</option><option value="168">每周</option><option value="720">每 30 天</option>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)"><input type="checkbox" id="excelScheduleEnabled" onchange="saveExcelSchedule()">定期自动保存</label>
+      <select id="excelScheduleInterval" aria-label="自动保存间隔" onchange="saveExcelSchedule()" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px">
+        <option value="24">每 1 天</option><option value="72">每 3 天</option><option value="168">每 7 天</option><option value="720">每 30 天</option>
       </select>
       <span id="excelScheduleStatus" class="desc" style="margin:0">自动保存已关闭</span>
     </div>
@@ -1310,6 +1326,7 @@ function switchPanel(btn){
   if(btn.dataset.p==='p13')loadStudentDirectory();
   if(btn.dataset.p==='p14')loadExcelArchiveTools();
   if(btn.dataset.p==='p1b')renderPracticePage();
+  if(btn.dataset.p==='p3'){const box=document.getElementById('aiInsightBox');if(box)box.style.display=CURRENT.role!=='student'?'block':'none';}
 }
 /* Reload after server-side revocation so cached role data and pending requests are discarded. */
 document.getElementById('logoutBtn').onclick=async event=>{
@@ -1529,6 +1546,24 @@ async function submitReview(event,index){
   }catch(error){alert(error.message||'复核失败');}
 }
 
+let INSIGHT_IN_FLIGHT=false;
+async function askInsight(preset){
+  if(INSIGHT_IN_FLIGHT)return;
+  const input=document.getElementById('aiInsightInput');
+  const question=String(preset||input?.value||'').trim();if(!question)return;
+  INSIGHT_IN_FLIGHT=true;
+  const button=document.getElementById('aiInsightBtn');if(button)button.disabled=true;
+  const out=document.getElementById('aiInsightOut');
+  out.innerHTML='<div class="typing"><i></i><i></i><i></i></div><p class="desc" style="margin:6px 0 0">正在汇总本班数据并生成解读…(通常 10~30 秒)</p>';
+  try{
+    const data=await apiRequest('/api/progress/ai-insight',{method:'POST',body:JSON.stringify({course_id:await ensureCourseId(),question})});
+    out.innerHTML=`<div class="msg bot" style="margin-top:10px">${textHtml(data.answer_markdown)}<small style="display:block;margin-top:8px;color:var(--muted)">基于 ${data.snapshot_students} 名学生的服务端真实数据解读</small></div>`;
+    if(!preset&&input)input.value='';
+  }catch(error){
+    out.innerHTML=`<div class="msg bot" style="margin-top:10px">❌ ${escapeHtml(error.message||'解读失败')}</div>`;
+  }finally{INSIGHT_IN_FLIGHT=false;if(button)button.disabled=false;}
+}
+function aiInsightQuick(question){const input=document.getElementById('aiInsightInput');if(input)input.value=question;askInsight(question);}
 /* ===== P4 点名 ===== */
 let STUDENTS=[],rollState={idx:-1,done:[]};
 function renderRoster(){
@@ -2180,9 +2215,11 @@ async function clearPracticeHistory(){
   }catch(error){alert(error.message||'清空失败');}
 }
 /* ===== 教师 / 管理员 API 适配 ===== */
+const KB_LABELS={audit_textbook:'教材讲义',audit_standards:'准则法规',audit_cases:'实务案例',cpa_question_bank:'题库资料'};
 function statusPill(status){
   const cls=status==='published'||status==='ready'?'ok':status==='draft'||status==='failed'?'bad':'mid';
-  return `<span class="pill ${cls}">${escapeHtml(status)}</span>`;
+  const textMap={published:'已发布',draft:'草稿',reviewing:'待审核',retired:'已下架',ready:'就绪',failed:'失败',deferred:'处理中'};
+  return `<span class="pill ${cls}">${escapeHtml(textMap[status]||status)}</span>`;
 }
 function roleText(role){return role==='admin'?'管理员':role==='teacher'?'教师':'学生';}
 function questionActions(question){
@@ -2223,10 +2260,14 @@ function renderBankTable(){
   const pageSize=20,pages=Math.max(1,Math.ceil(rows.length/pageSize));BANK_PAGE=Math.min(BANK_PAGE,pages);
   const pageRows=rows.slice((BANK_PAGE-1)*pageSize,BANK_PAGE*pageSize);
   table.innerHTML=pageRows.length?pageRows.map(question=>{
-    const stem=(question.stem||'').slice(0,60)+(question.stem&&question.stem.length>60?'…':'');
+    const stem=question.stem||'';
+    const stemShort=stem.length>42?stem.slice(0,42)+'…':stem;
     const kp=(question.knowledge_points||[]).join('、');
+    const source=question.source||'';
+    const sourceShort=source.length>26?source.slice(0,26)+'…':source;
+    const diffMap={easy:'简单',medium:'中等',hard:'困难'};
     const checkbox=question.status==='published'?`<input type="checkbox" ${BANK_SELECTED.has(question.id)?'checked':''} onchange="toggleQuizSelect('${escapeHtml(question.id)}',this.checked)" title="勾选加入试卷">`:'';
-    return `<tr data-id="${escapeHtml(question.id)}"><td>${checkbox}</td><td>${escapeHtml(question.code)}</td><td><div>${escapeHtml(stem)}</div><small style="color:var(--muted)">${escapeHtml(kp)||'未标注'} · ${escapeHtml(question.source||'')}</small></td><td>${escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`;
+    return `<tr data-id="${escapeHtml(question.id)}"><td>${checkbox}</td><td>${escapeHtml(question.code)}</td><td><div title="${escapeHtml(stem)}" style="cursor:help">${escapeHtml(stemShort)}</div><small style="color:var(--muted)" title="${escapeHtml(kp)} · ${escapeHtml(source)}">${escapeHtml(kp.length>18?kp.slice(0,18)+'…':kp)||'未标注'} · ${escapeHtml(sourceShort)}</small></td><td>${diffMap[question.difficulty]||escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`;
   }).join(''):'<tr><td colspan="6" style="color:var(--muted)">没有匹配的题目</td></tr>';
   const pager=document.getElementById('bankPager');
   if(pager)pager.innerHTML=`<button class="btn sm ghost" ${BANK_PAGE<=1?'disabled':''} onclick="BANK_PAGE--;renderBankTable()">上一页</button><span style="font-size:12px;color:var(--muted)">第 ${BANK_PAGE} / ${pages} 页 · 匹配 ${rows.length} 题</span><button class="btn sm ghost" ${BANK_PAGE>=pages?'disabled':''} onclick="BANK_PAGE++;renderBankTable()">下一页</button>`;
@@ -2241,6 +2282,35 @@ function toggleSelectAll(input){
     return q.status==='published'&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
   }).forEach(q=>{input.checked?BANK_SELECTED.add(q.id):BANK_SELECTED.delete(q.id);});
   renderBankTable();
+}
+function clearBankSelection(){BANK_SELECTED.clear();renderBankTable();}
+function quickPickForQuiz(){
+  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
+  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
+  const pool=BANK_QUESTIONS.filter(q=>{
+    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''} ${q.code||''}`.toLowerCase();
+    return q.status==='published'&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
+  });
+  if(!pool.length){alert('当前筛选下没有已发布的题目');return;}
+  // 按题型分组均匀抽,单选优先,目标 10 题
+  const byType={};
+  pool.forEach(q=>{(byType[q.type]=byType[q.type]||[]).push(q);});
+  const order=['single_choice','multi_choice','judge','fill','short_answer','case'];
+  const target=Math.min(10,pool.length);
+  BANK_SELECTED.clear();
+  let round=0;
+  while(BANK_SELECTED.size<target){
+    let added=false;
+    for(const type of order){
+      const list=byType[type];
+      if(list&&list.length>round){BANK_SELECTED.add(list[round].id);added=true;}
+      if(BANK_SELECTED.size>=target)break;
+    }
+    if(!added)break;
+    round++;
+  }
+  BANK_PAGE=1;renderBankTable();
+  alert(`已智能选题 ${BANK_SELECTED.size} 道(按题型均匀覆盖当前筛选)。可在底部组卷栏调整后分发。`);
 }
 function updateQuizBar(){
   const bar=document.getElementById('quizBuilderBar');if(!bar)return;
@@ -2364,7 +2434,7 @@ function documentRow(document){
   const summary=document.summary?`<details style="margin-top:5px"><summary style="cursor:pointer;color:var(--teal);font-size:11px">查看 AI 摘要</summary><div style="margin-top:4px;color:var(--muted);font-size:11.5px;line-height:1.5">${escapeHtml(document.summary)}${document.topics?.length?`<br><b>主题：</b>${escapeHtml(document.topics.join('、'))}`:''}</div></details>`:'';
   const summaryAction=`<button class="btn sm ghost" onclick="summarizeDocument(this)">${document.summary?'刷新摘要':'AI 摘要'}</button>`;
   const action=document.shared?summaryAction:`${summaryAction} <button class="btn sm ghost" onclick="deleteDocument(this)">删除</button>`;
-  return `<tr data-id="${escapeHtml(document.id)}"><td><b>${escapeHtml(document.name)}</b><br><small style="color:var(--muted)" title="${escapeHtml(source)}">${escapeHtml(source)} · ${formatBytes(document.size)}</small>${summary}</td><td><span class="pill info">${escapeHtml(document.target_kb)}</span></td><td>${statusPill(ready?'ready':status)}</td><td>${action}</td></tr>`;
+  return `<tr data-id="${escapeHtml(document.id)}"><td><b>${escapeHtml(document.name)}</b><br><small style="color:var(--muted)" title="${escapeHtml(source)}">${escapeHtml(source)} · ${formatBytes(document.size)}</small>${summary}</td><td><span class="pill info">${escapeHtml(KB_LABELS[document.target_kb]||document.target_kb)}</span></td><td>${statusPill(ready?'ready':status)}</td><td>${action}</td></tr>`;
 }
 function renderDocuments(){
   const table=document.getElementById('docTable');if(!table)return;

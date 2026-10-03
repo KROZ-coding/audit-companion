@@ -345,6 +345,11 @@ class QuizAssignRequest(BaseModel):
     due_at: datetime | None = None
 
 
+class AiInsightRequest(BaseModel):
+    course_id: str
+    question: str = Field(min_length=2, max_length=400)
+
+
 class AiQuestionGenerateRequest(BaseModel):
     course_id: str
     knowledge_points: list[str] = Field(min_length=1, max_length=10)
