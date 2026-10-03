@@ -300,6 +300,11 @@ def _add_usage(total: dict[str, int], current: dict[str, int]) -> None:
         total[key] += current.get(key, 0)
 
 
+def _json_mode_unsupported_text(buffer: str) -> bool:
+    lowered = buffer[:400].lower()
+    return any(term in lowered for term in ("response_format", "json_object")) and '"questions"' not in lowered
+
+
 def _combined_error(errors: list[str]) -> str:
     if not errors:
         return "unavailable"
@@ -755,6 +760,141 @@ class LLMClient:
     def complete_json(self, messages: list[dict[str, str]], temperature: float = 0.2) -> dict[str, Any] | None:
         result = self._complete_sync(messages, temperature, True, structured=True)
         return result if isinstance(result, dict) else None
+
+    async def stream_json_async(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        on_delta=None,
+    ) -> dict[str, Any] | None:
+        """流式 JSON 补全:逐 chunk 回调 on_delta(累计文本),完成后返回解析对象。
+
+        与 complete_json_async 共用通道选择/闸门/限流/冷却逻辑;失败时 last_error
+        语义一致,调用方可回退非流式。
+        """
+        self._reset_call()
+        providers = self._providers()
+        if not providers:
+            self.last_error = "not_configured"
+            return None
+        started = monotonic()
+        queue_deadline = started + max(self.settings.llm_queue_timeout_seconds, 0)
+        request_deadline = started + max(self.settings.llm_total_timeout_seconds, 0)
+        errors = []
+        waited_for_cooldown = False
+        for provider in providers[: self.settings.llm_max_attempts]:
+            cooldown = _cooling(provider)
+            if cooldown and not waited_for_cooldown:
+                budget = min(cooldown[0], 60.0, request_deadline - monotonic())
+                if budget > 0.05:
+                    logger.info("LLM channel cooling %.1fs; waiting once", cooldown[0])
+                    await asyncio.sleep(budget)
+                    waited_for_cooldown = True
+                    cooldown = _cooling(provider)
+            if cooldown:
+                errors.append("cooling_down")
+                continue
+            gate = _gate_for(provider)
+            quota = _quota_for(provider)
+            tpm_estimate = 0
+            if monotonic() >= request_deadline:
+                errors.append("timeout")
+                break
+            gate_timeout = max(min(queue_deadline, request_deadline) - monotonic(), 0)
+            if not await self._acquire_async(gate, gate_timeout):
+                errors.append("busy")
+                continue
+            response = None
+            try:
+                if quota is not None:
+                    tpm_estimate = _estimate_tokens(messages, self.settings.llm_token_output_estimate)
+                    quota_timeout = max(min(queue_deadline, request_deadline) - monotonic(), 0)
+                    if not await self._acquire_quota_async(quota, tpm_estimate, quota_timeout):
+                        errors.append("rate_limited")
+                        continue
+                payload = self._payload(provider, messages, temperature, True)
+                payload["stream"] = True
+                remaining = request_deadline - monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                timeout = min(self.settings.llm_timeout_seconds, remaining)
+                client = _shared_async_client()
+                self.last_request_sent = True
+                request = client.build_request(
+                    "POST", self._completion_url(provider),
+                    headers={"Authorization": f"Bearer {provider.api_key}"},
+                    json=payload,
+                )
+                response = await client.send(request, stream=True)
+                if response.status_code >= 400:
+                    error = self._note_http_failure(provider, response)
+                    errors.append(error)
+                    continue
+                buffer = ""
+                usage_acc: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+                async for line in response.aiter_lines():
+                    if monotonic() > request_deadline:
+                        raise asyncio.TimeoutError
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    usage_chunk = chunk.get("usage")
+                    if isinstance(usage_chunk, dict):
+                        _add_usage(usage_acc, {
+                            "prompt_tokens": _token_count(usage_chunk.get("prompt_tokens", 0)),
+                            "completion_tokens": _token_count(usage_chunk.get("completion_tokens", 0)),
+                        })
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content")
+                    if isinstance(piece, str) and piece:
+                        buffer += piece
+                        if on_delta:
+                            try:
+                                on_delta(buffer)
+                            except Exception:
+                                pass
+                self.last_usage = usage_acc
+                self.last_model = provider.model
+                self.last_request_id = "stream"
+                if _json_mode_unsupported_text(buffer):
+                    errors.append("http_error")
+                    logger.warning("LLM provider %s stream rejected response_format", provider.name)
+                    continue
+                result = _extract_json(buffer)
+                if result is None:
+                    errors.append("invalid_json")
+                    logger.warning("LLM provider %s stream produced invalid JSON", provider.name)
+                    continue
+                _clear_cooldown(provider)
+                self.last_provider = provider.name
+                return result
+            except (httpx.TimeoutException, asyncio.TimeoutError):
+                self.last_model = provider.model
+                errors.append("timeout")
+                continue
+            except httpx.HTTPError as error:
+                self.last_model = provider.model
+                errors.append("transport_error")
+                continue
+            finally:
+                if response is not None:
+                    try:
+                        await response.aclose()
+                    except Exception:
+                        pass
+                gate.release()
+        self._finish(errors)
+        return None
 
     async def complete_json_async(
         self, messages: list[dict[str, str]], temperature: float = 0.2

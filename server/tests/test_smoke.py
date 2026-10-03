@@ -2582,6 +2582,94 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(second, "ok")
         self.assertEqual(calls, 2)
 
+    def test_stream_json_async_parses_sse_and_reports_deltas(self) -> None:
+        import json as _json
+
+        chunks = [
+            {"choices": [{"delta": {"content": '{"answer_markdown":"函证要点",'}}]},
+            {"choices": [{"delta": {"content": '"sections":{"conclusion":"按准则函证","standards":"1312","case":"","ideology":""},'}}]},
+            {"choices": [{"delta": {"content": '"mind_map":["函证"]}'}}]},
+            {"usage": {"prompt_tokens": 100, "completion_tokens": 50}},
+        ]
+        sse_body = "".join(
+            f"data: {_json.dumps(chunk, ensure_ascii=False)}" + "\n\n" for chunk in chunks
+        ) + "data: [DONE]\n\n"
+        provider = LLMProvider(
+            "stream-test", "shared", "https://stream.test/v1", "key", "model", 2, 4, 1, "stream-test-unique",
+        )
+        settings = Settings(
+            llm_base_url="", llm_api_key="", llm_model="", llm_providers=(provider,),
+            llm_total_timeout_seconds=15,
+        )
+
+        deltas = []
+        original_client = httpx.AsyncClient
+        with patch(
+            "app.services.llm_client.httpx.AsyncClient",
+            side_effect=lambda **kwargs: original_client(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body.encode())
+            ), **kwargs),
+        ):
+            client = LLMClient(settings, "shared")
+            result = asyncio.run(client.stream_json_async(
+                [{"role": "user", "content": "出题"}], on_delta=lambda buffer: deltas.append(buffer)
+            ))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["answer_markdown"], "函证要点")
+        self.assertEqual(result["sections"]["standards"], "1312")
+        self.assertEqual(client.last_provider, "stream-test")
+        self.assertEqual(client.last_usage, {"prompt_tokens": 100, "completion_tokens": 50})
+        self.assertGreaterEqual(len(deltas), 2)
+
+    def test_stream_endpoint_returns_sse_events(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        store = self.app.state.store
+        student = store.find_user_by_username("stu001")
+        store.chat_history.append({
+            "id": "stream-seed", "created_at": datetime.now(timezone.utc).isoformat(), "important": False,
+            "user_id": student.id, "course_id": "audit-101", "question": "流式验证问题",
+            "response": {"answer_markdown": "x", "sections": {}, "mind_map": [], "sources": [], "degraded": False, "degraded_reason": None},
+        })
+
+        async def fake_stream(settings, question, records, channel="student", on_delta=None):
+            if on_delta:
+                on_delta("partial")
+            return ({"answer_markdown": "流式回答", "sections": {"conclusion": "c", "standards": "s", "case": "", "ideology": ""},
+                     "mind_map": ["m"], "sources": [], "degraded": False, "degraded_reason": None},
+                    None, "fake-model", {"prompt_tokens": 1, "completion_tokens": 2}, True)
+
+        with patch("app.routers.chat.build_answer_stream", side_effect=fake_stream):
+            response = self.client.post("/api/chat/ask/stream", json={"question": "流式验证", "course_id": "audit-101"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers.get("content-type", ""))
+        body = response.text
+        self.assertIn('"type": "retrieval"', body)
+        self.assertIn('"type": "done"', body)
+        self.assertIn("流式回答", body)
+        self.assertTrue(any(item.get("question") == "流式验证" for item in store.chat_history))
+
+    def test_stream_endpoint_fallback_signal_on_model_failure(self) -> None:
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*", "role": "student"})
+        store = self.app.state.store
+        student = store.find_user_by_username("stu001")
+        store.chat_history.append({
+            "id": "stream-seed2", "created_at": datetime.now(timezone.utc).isoformat(), "important": False,
+            "user_id": student.id, "course_id": "audit-101", "question": "失败流式",
+            "response": {"answer_markdown": "x", "sections": {}, "mind_map": [], "sources": [], "degraded": False, "degraded_reason": None},
+        })
+
+        async def fake_fail(settings, question, records, channel="student", on_delta=None):
+            return (None, "rate_limited", "fake-model", {"prompt_tokens": 0, "completion_tokens": 0}, True)
+
+        with patch("app.routers.chat.build_answer_stream", side_effect=fake_fail):
+            response = self.client.post("/api/chat/ask/stream", json={"question": "失败流式", "course_id": "audit-101"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"type": "error"', response.text)
+        self.assertIn("model_rate_limited", response.text)
+
     def test_teacher_cannot_generate_practice(self) -> None:
         self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*", "role": "teacher"})
         response = self.client.post("/api/practice/generate", json={"count": 3})

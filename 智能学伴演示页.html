@@ -1810,6 +1810,27 @@ async function bootAuth(){
 }
 
 let ASK_IN_FLIGHT=false;
+function renderChatAnswer(data){
+  const labels={conclusion:'📌 知识点结论',standards:'📖 准则来源',case:'💼 案例示例',ideology:'🌱 思政启示'};
+  const sections=Object.entries(data.sections||{}).filter(([,value])=>String(value||'').trim());
+  let html='<div class="msg bot">';
+  if(sections.length){
+    sections.forEach(([key,value],i)=>{
+      html+=`<div class="sec s${(i%4)+1}"><b>${labels[key]||escapeHtml(key)}</b>${textHtml(value)}</div>`;
+    });
+  }else html+=`<div>${textHtml(data.answer_markdown||'暂无回答')}</div>`;
+  if(data.mind_map?.length)html+=`<b>🧠 思维导图</b><ul class="maplist">${data.mind_map.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>`;
+  if(data.sources?.length)html+=`<span class="src" style="display:block;margin-top:7px;font-size:11.5px;color:var(--teal)">📎 来源：${data.sources.map(x=>escapeHtml(x.name)).join('、')}</span>`;
+  return html+'</div>';
+}
+async function askFallback(q,chat,typingId){
+  const data=await apiRequest('/api/chat/ask',{method:'POST',body:JSON.stringify({question:q,course_id:LIVE_COURSE_ID})});
+  document.getElementById(typingId)?.remove();
+  let html=renderChatAnswer(data);
+  const degradedNotice={no_knowledge:'未检索到相关课程资料，以下回答来自模型通用知识。',model_unconfigured:'模型接口尚未配置，请管理员检查服务端 URL、Key 和模型名。',model_unavailable:'模型服务暂不可用，本次未生成有效回答。',model_http_error:'模型服务返回错误，请检查接口地址、Key、模型名及中转站参数。',model_rate_limited:'模型中转站达到速率或并发上限，请稍后重试或联系管理员调整通道容量。',model_busy:'模型服务当前排队已满，本次没有消耗模型配额，请稍后重试。',model_cooling_down:'模型通道刚发生故障，正在短暂冷却，本次没有消耗模型配额。请稍后重试。',model_timeout:'模型服务请求超时，本次未生成回答。',model_transport_error:'模型服务连接中断，本次未生成回答。',model_invalid_response:'模型服务已响应，但返回格式无法识别；可根据服务端日志中的请求 ID 排查。',model_empty_response:'模型服务已响应，但没有返回可用文本内容。'}[data.degraded_reason];
+  if(degradedNotice)html+=`<span style="display:block;margin-top:7px;font-size:11.5px;color:var(--amber)">${escapeHtml(degradedNotice)}</span>`;
+  chat.insertAdjacentHTML('beforeend',html);
+}
 async function ask(q){
   q=String(q||'').trim();if(!q)return;
   if(ASK_IN_FLIGHT)return;
@@ -1818,32 +1839,56 @@ async function ask(q){
   if(sendButton){sendButton.disabled=true;sendButton.textContent='回答中…';}
   const chat=document.getElementById('chat1');
   const typingId='typing-'+Date.now();
-  chat.insertAdjacentHTML('beforeend',`<div class="msg user">${escapeHtml(q)}</div><div class="typing" id="${typingId}"><i></i><i></i><i></i></div><div class="msg bot hint" style="color:var(--muted);font-size:12px">正在检索课程资料并生成回答,通常需要 20~90 秒,请稍候…</div>`);
+  chat.insertAdjacentHTML('beforeend',`<div class="msg user">${escapeHtml(q)}</div><div class="typing" id="${typingId}"><i></i><i></i><i></i></div><div class="msg bot hint" style="color:var(--muted);font-size:12px">正在检索课程资料…</div>`);
   chat.scrollTop=chat.scrollHeight;
+  let done=false;
   try{
-    const data=await apiRequest('/api/chat/ask',{method:'POST',body:JSON.stringify({question:q,course_id:LIVE_COURSE_ID})});
-    document.getElementById(typingId)?.remove();
-    const labels={conclusion:'📌 知识点结论',standards:'📖 准则来源',case:'💼 案例示例',ideology:'🌱 思政启示'};
-    const sections=Object.entries(data.sections||{}).filter(([,value])=>String(value||'').trim());
-    let html='<div class="msg bot">';
-    if(sections.length){
-      sections.forEach(([key,value],i)=>{
-        html+=`<div class="sec s${(i%4)+1}"><b>${labels[key]||escapeHtml(key)}</b>${textHtml(value)}</div>`;
-      });
-    }else html+=`<div>${textHtml(data.answer_markdown||'暂无回答')}</div>`;
-    if(data.mind_map?.length)html+=`<b>🧠 思维导图</b><ul class="maplist">${data.mind_map.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul>`;
-    if(data.sources?.length)html+=`<span class="src" style="display:block;margin-top:7px;font-size:11.5px;color:var(--teal)">📎 来源：${data.sources.map(x=>escapeHtml(x.name)).join('、')}</span>`;
-    if(CURRENT.role==='student'){
-      CHAT_PRACTICE_SOURCES.push(q);
-      html+=`<span style="display:block;margin-top:8px"><button class="btn sm primary" onclick="practiceFromChat(${CHAT_PRACTICE_SOURCES.length-1})">✨ 生成对应题目</button></span>`;
+    /* 流式优先:SSE 检索/生成阶段事件,done 带完整结构化结果;失败自动回退非流式 */
+    const response=await fetch('/api/chat/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({question:q,course_id:LIVE_COURSE_ID})});
+    if(!response.ok||!response.body)throw new Error('stream unavailable');
+    const reader=response.body.getReader();
+    const decoder=new TextDecoder();
+    let buffer='',streamError=null;
+    while(true){
+      const{value,done:finished}=await reader.read();
+      if(finished)break;
+      buffer+=decoder.decode(value,{stream:true});
+      let sep;
+      while((sep=buffer.indexOf('\n\n'))>-1){
+        const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);
+        const line=frame.split('\n').find(l=>l.startsWith('data:'));
+        if(!line)continue;
+        let event;try{event=JSON.parse(line.slice(5).trim());}catch(e){continue;}
+        if(event.type==='retrieval'){
+          const hint=document.querySelector('#chat1 .msg.hint');
+          if(hint)hint.textContent=event.sources?.length?`已检索到 ${event.sources.length} 份课程资料,正在生成回答…(通常 20~90 秒)`:'未检索到课程资料,基于通用知识生成回答…(通常 20~90 秒)';
+        }else if(event.type==='done'){
+          done=true;
+          document.getElementById(typingId)?.remove();
+          document.querySelectorAll('#chat1 .msg.hint').forEach(x=>x.remove());
+          const data=event.result;
+          let html=renderChatAnswer(data);
+          if(data.degraded)html+=`<span style="display:block;margin-top:7px;font-size:11.5px;color:var(--amber)">未检索到相关课程资料，以下回答来自模型通用知识。</span>`;
+          chat.insertAdjacentHTML('beforeend',html);
+          QA_LOG.unshift({stu:CURRENT.name||'我',q:aShort(q),a:data.degraded?'未检索到资料,模型通用回答':'知识库检索 + 模型回答',n:QA_LOG.length+1});
+          if(ROLES[CURRENT.role]&&CURRENT.role!=='student')renderQaTable();
+        }else if(event.type==='error'){
+          streamError=event.message||'生成失败';
+        }
+      }
     }
-    const degradedNotice={no_knowledge:'未检索到相关课程资料，以下回答来自模型通用知识。',model_unconfigured:'模型接口尚未配置，请管理员检查服务端 URL、Key 和模型名。',model_unavailable:'模型服务暂不可用，本次未生成有效回答。',model_http_error:'模型服务返回错误，请检查接口地址、Key、模型名及中转站参数。',model_rate_limited:'模型中转站达到速率或并发上限，请稍后重试或联系管理员调整通道容量。',model_busy:'模型服务当前排队已满，本次没有消耗模型配额，请稍后重试。',model_cooling_down:'模型通道刚发生故障，正在短暂冷却，本次没有消耗模型配额。请稍后重试。',model_timeout:'模型服务请求超时，本次未生成回答。',model_transport_error:'模型服务连接中断，本次未生成回答。',model_invalid_response:'模型服务已响应，但返回格式无法识别；可根据服务端日志中的请求 ID 排查。',model_empty_response:'模型服务已响应，但没有返回可用文本内容。'}[data.degraded_reason];
-    if(degradedNotice)html+=`<span style="display:block;margin-top:7px;font-size:11.5px;color:var(--amber)">${escapeHtml(degradedNotice)}</span>`;
-    html+='</div>';chat.insertAdjacentHTML('beforeend',html);
-    QA_LOG.unshift({stu:CURRENT.name||'我',q:aShort(q),a:degradedNotice||'知识库检索 + 模型回答',n:QA_LOG.length+1});
-    if(ROLES[CURRENT.role]&&CURRENT.role!=='student')renderQaTable();
-  }catch(error){document.getElementById(typingId)?.remove();chat.insertAdjacentHTML('beforeend',`<div class="msg bot">${escapeHtml(error.message||'答疑请求失败')}</div>`);}
-  finally{
+    if(!done)throw new Error(streamError||'stream incomplete');
+  }catch(streamFailure){
+    /* 回退非流式 */
+    try{
+      await askFallback(q,chat,typingId);
+      QA_LOG.unshift({stu:CURRENT.name||'我',q:aShort(q),a:'知识库检索 + 模型回答',n:QA_LOG.length+1});
+      if(ROLES[CURRENT.role]&&CURRENT.role!=='student')renderQaTable();
+    }catch(error){
+      document.getElementById(typingId)?.remove();
+      chat.insertAdjacentHTML('beforeend',`<div class="msg bot">${escapeHtml(error.message||'答疑请求失败')}</div>`);
+    }
+  }finally{
     document.querySelectorAll('#chat1 .msg.hint').forEach(x=>x.remove());
     ASK_IN_FLIGHT=false;
     if(sendButton){sendButton.disabled=false;sendButton.textContent='发送';}
