@@ -17,6 +17,12 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/example.edu.cn/privkey.pem;
     client_max_body_size 50m;
 
+    # 慢速攻击防护(Slowloris 类):短超时关掉半开连接,应用层防不住这类攻击
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    keepalive_timeout 15s;
+    send_timeout 30s;
+
     location = /api/auth/login {
         limit_req zone=login burst=20 nodelay;
         proxy_pass http://127.0.0.1:8000;
