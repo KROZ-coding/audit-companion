@@ -1371,6 +1371,19 @@ function useSelectedStudentsForAssignment(){
   if(!SELECTED_STUDENT_IDS.size)return;
   document.getElementById('quizTarget').value='selected';
   const button=document.querySelector('#appNav button[data-p="p8"]');if(button)switchPanel(button);
+  setTimeout(()=>{
+    const bar=document.getElementById('quizBuilderBar');
+    if(!bar)return;
+    if(BANK_SELECTED.size){
+      bar.scrollIntoView({behavior:'smooth',block:'center'});
+      bar.style.boxShadow='0 0 0 3px var(--teal, #3b82f6)';
+      setTimeout(()=>{bar.style.boxShadow='';},1600);
+    }else{
+      const table=document.querySelector('#p8 .table-scroll');
+      if(table)table.scrollIntoView({behavior:'smooth',block:'start'});
+      alert('已切换到题库审查:请先勾选已发布的题目(在表格里勾选),勾选后底部会出现组卷分发栏');
+    }
+  },350);
 }
 function formatShortDate(value){
   if(!value)return '—';
@@ -1890,7 +1903,7 @@ async function renderQuiz(){
           area.innerHTML='<div class="desc">选择上方测验后继续答题。</div>';return;
        }
      }
-     await startRandomQuiz();
+     area.innerHTML='<div class="desc">老师还没有给你布置测验。可以先把课程过一遍,等布置后这里会出现「待完成测验」;<br>想立即练习?去上方 <b>🧠 AI 练习</b> 根据你的提问生成专属题目,或<button class="btn sm primary" style="margin:0 4px" onclick="startRandomQuiz()">随机来一组</button>(需题库题型齐备)。</div>';
   }catch(error){showApiError(area,error.message||'测验加载失败');}
 }
 function changeStudentCourse(courseId){
