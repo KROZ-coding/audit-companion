@@ -158,6 +158,35 @@ def insight_text(text: str) -> str:
     def ratio(student):
         return student.get("score_ratio")
 
+    def percent(student):
+        value = ratio(student)
+        return f"得分率 {round(value * 100)}%" if value is not None else "暂无成绩"
+
+    # 点名问某个学生(姓名或用户名出现在提问里)→ 个人档案式回答
+    targets = [s for s in students if s["name"] in question or (s.get("username") or "") in question]
+    if targets:
+        s = targets[0]
+        lines = [f"{s['name']}({s.get('username','')})目前:完成测验 {s.get('quiz_count', 0)} 次,{percent(s)};"
+                 f"答疑 {s.get('ask_count', 0)} 次"]
+        if s.get("pending_review"):
+            lines.append(f"有 {s['pending_review']} 题在等你复核")
+        if s.get("last_ask"):
+            lines.append(f"最近提问 {s['last_ask']}")
+        recent = [item.get("question", "") for item in (s.get("recent_questions") or [])[:2] if item.get("question")]
+        if recent:
+            lines.append("最近在问:" + "、".join(item[:24] for item in recent))
+        advice = ("成绩靠前,可给更有挑战的任务,继续保持。" if (ratio(s) or 0) >= 0.8
+                  else "建议针对错题做一次一对一讲解,并督促补齐薄弱知识点。" if (ratio(s) or 0) < 0.6
+                  else "整体平稳,重点补错题集中的知识点即可。")
+        return ";".join(lines) + f"。{advice}(模拟解读)"
+
+    if "最好" in question or "优秀" in question or "表扬" in question or "前列" in question:
+        ranked = sorted((s for s in students if ratio(s) is not None), key=ratio, reverse=True)[:3]
+        if ranked:
+            listed = ";".join(f"{s['name']} {percent(s)}" for s in ranked)
+            return f"表现最好的三位:{listed}。可在课堂上公开表扬并请他们分享方法。(模拟解读)"
+        return "还没有可比较的成绩数据。(模拟解读)"
+
     if "完成度" in question:
         ranked = sorted(students, key=lambda s: (s.get("quiz_count") or 0, s.get("ask_count") or 0))[:3]
         parts = []
@@ -202,8 +231,15 @@ def insight_text(text: str) -> str:
 
     scored = [ratio(s) for s in students if ratio(s) is not None]
     average = round(sum(scored) / len(scored) * 100) if scored else 0
-    tail = f"最薄弱的知识点是{weak[0][0]}。" if weak else "暂无明显薄弱知识点。"
-    return f"全班 {len(students)} 人,平均得分率约 {average}%;{tail}(模拟解读)"
+    tail = f"最薄弱的知识点是{weak[0][0]}。" if weak else (f"知识点整体掌握尚可(最弱:{strong[-1][0]})。" if strong else "")
+    return (
+        f"班级快照:共 {len(students)} 人;人均完成测验 "
+        f"{round(sum(s.get('quiz_count', 0) for s in students) / len(students), 1)} 次,"
+        f"人均答疑 {round(sum(s.get('ask_count', 0) for s in students) / len(students), 1)} 次;"
+        + (f"平均得分率约 {average}%。" if scored else "暂无成绩数据。")
+        + tail
+        + "建议优先跟进暂无成绩与低分学生,薄弱知识点安排一次集中讲解。(模拟解读)"
+    )
 
 
 def chat_json(text: str) -> str:

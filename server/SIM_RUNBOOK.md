@@ -75,3 +75,14 @@ python sim_class_term.py --base http://127.0.0.1:8000 \
 - 主观题流程是完整的"AI rubric 初评 → manual_pending → 教师复核 → 计入掌握度"。
 - 会落审计日志与 AI 用量(各 5000 条封顶);30 讲跑完 usage_logs 不会溢出。
 - 安全提示:这套数据是模拟数据,别把 sim-data 里的 store.json 拷进正式服务。
+
+## 5. 切换真实模型(可选)
+
+模拟实例默认用零消耗假模型。想让 18000 上的答疑/学情问答跑真模型:
+
+```bash
+docker compose -f docker-compose.sim.yml -f docker-compose.sim.real.yml up -d
+docker compose -f docker-compose.sim.yml up -d   # 切回假模型
+```
+
+原理:叠加配置清空假模型三件套并放开 SKIP_ENV_FILE,让容器读取挂载进来的 server/.env 通道池。真实额度消耗见上表单耗。

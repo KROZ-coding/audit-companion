@@ -1,0 +1,14 @@
+# 真模型开关:叠加在本文件后,模拟实例(18000)改用 server/.env 里的真实模型通道。
+# 用法:
+#   docker compose -f docker-compose.sim.yml -f docker-compose.sim.real.yml up -d
+# 切回假模型(零消耗):
+#   docker compose -f docker-compose.sim.yml up -d
+# 注意:答疑/学情问答/AI 出题会消耗真实额度(答疑一次约 1250 token,练习一次约 3200 token),
+# 日配额在模拟环境里被放宽到 100000,切真模型时留意用量日志(server 容器 usage_logs)。
+services:
+  sim-app:
+    environment:
+      SKIP_ENV_FILE: ""   # 允许读取挂载进容器的 server/.env(Provider 池与 Key 都在里面)
+      LLM_BASE_URL: ""    # 清空假模型三件套,回退到 .env 的 LLM_PROVIDERS_JSON 通道池
+      LLM_API_KEY: ""
+      LLM_MODEL: ""
