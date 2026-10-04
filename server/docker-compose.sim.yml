@@ -1,0 +1,56 @@
+# 学期模拟专用编排:30 人 × 30 节课的 Docker 化真实服务端。
+# 用法见 SIM_RUNBOOK.md。宿主机端口默认 18000,避免与本地 8000 的正式服务冲突。
+# 如无 server/data/knowledge/index.pkl(新机器克隆仓库),注释掉 index.pkl 的挂载即可,
+# 答疑会降级为 no_knowledge,不影响其余流程。
+
+name: audit-companion-sim
+
+services:
+  sim-llm:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    container_name: audit-sim-llm
+    command: python sim_llm_server.py --host 0.0.0.0 --port 9000
+    volumes:
+      - .:/app/server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9000/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  sim-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    container_name: audit-sim-app
+    working_dir: /app/server
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      SKIP_ENV_FILE: "1"                    # 不读宿主机 server/.env,模拟环境自给自足
+      PERSISTENCE_ENABLED: "true"
+      DATA_DIR: /data
+      LLM_BASE_URL: http://sim-llm:9000
+      LLM_API_KEY: sim-key
+      LLM_MODEL: sim-model
+      LLM_REASONING_EFFORT: "none"
+      LLM_MAX_TOKENS: "4000"
+      CHAT_DAILY_LIMIT: "100000"            # 模拟 30 节课压缩在真实一天内,放开日配额
+      REGISTRATION_RATE_LIMIT: "100000"     # 注册并发不受每 IP 限流影响
+      APP_NAME: 审计智能学伴 API(学期模拟)
+    ports:
+      - "${SIM_PORT:-18000}:8000"
+    volumes:
+      - .:/app/server
+      - ./sim-data:/data
+      - ./data/knowledge/index.pkl:/data/knowledge/index.pkl:ro
+    depends_on:
+      sim-llm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

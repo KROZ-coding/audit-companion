@@ -1,0 +1,14 @@
+.env
+.env.*
+.venv
+venv
+data
+sim-data
+__pycache__
+**/__pycache__
+*.py[cod]
+loadtest_*.json
+tests
+Dockerfile.sim
+docker-compose.sim.yml
+.dockerignore

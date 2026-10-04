@@ -17,3 +17,9 @@ server/data/
 
 # 本地压测报告（运行产物）
 server/loadtest_*.json
+
+# 学期模拟运行数据(Docker 卷映射)
+server/sim-data/
+server/sim-run.log
+server/sim_term_excel.xlsx
+server/sim_summary.json
