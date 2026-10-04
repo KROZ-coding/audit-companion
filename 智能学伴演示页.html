@@ -335,15 +335,16 @@ html.dark .note{background:#22304f}
   .table-scroll table{min-width:560px}
   .btnrow{flex-wrap:wrap;gap:8px}
   .btnrow input,.btnrow select,.btnrow textarea{flex:1 1 140px;min-width:0;width:auto}
-  .chat{max-height:55vh}
+  .chat{min-height:160px;max-height:55vh}
   .quick{flex-wrap:wrap}
   .student-controls{flex-wrap:wrap;gap:8px}
   .student-controls select,.student-controls input{flex:1 1 120px;min-width:0}
   header.sh{padding:8px 10px;flex-wrap:wrap;gap:6px}
 }
 @media (max-width:560px){
-  nav{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:4px;padding:6px}
-  nav button{flex:0 0 auto;white-space:nowrap;padding:7px 10px;font-size:12.5px}
+  nav{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:4px;padding:6px;scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{flex:0 0 auto;width:auto;white-space:nowrap;padding:7px 10px;font-size:12.5px}
   nav .tip{display:none}
   .btnrow .btn{flex:1 1 auto}
 }
