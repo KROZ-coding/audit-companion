@@ -132,7 +132,7 @@ html.dark .pill.mid{background:rgba(245,158,11,.14)}
 html.dark .pill.info{background:rgba(91,140,255,.16)}
 
 /* ============ 按钮/输入 ============ */
-.btn{border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;
+.btn{border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;
   transition:transform 140ms var(--ease-out),background-color .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out),box-shadow .15s var(--ease-out)}
 .btn:active{transform:scale(.97)}
 .btn.primary{background:var(--accent);color:#fff}
@@ -333,6 +333,7 @@ html.dark .note{background:#22304f}
   .card{padding:12px;min-width:0}
   .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .table-scroll table{min-width:560px}
+  .table-scroll th{white-space:nowrap}
   .btnrow{flex-wrap:wrap;gap:8px}
   .btnrow input,.btnrow select,.btnrow textarea{flex:1 1 140px;min-width:0;width:auto}
   .chat{min-height:160px;max-height:55vh}

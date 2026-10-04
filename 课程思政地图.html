@@ -45,6 +45,15 @@ body{margin:0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;back
 .dcard .close{border:none;background:none;color:var(--muted);cursor:pointer;font-size:14px}
 .dcard .close:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){.dcard{animation:none}}
+/* 窄屏(手机/iframe 内嵌):顶栏换行收紧,隐藏长副标题与滚轮提示 */
+@media (max-width:640px){
+  #topbar{flex-wrap:wrap;row-gap:4px;padding:8px 12px}
+  #topbar .sub{display:none}
+  #topbar b{white-space:nowrap}
+  #topbar .fit-btn{white-space:nowrap}
+  #legend{left:10px;bottom:10px;padding:9px 12px;font-size:11px;line-height:1.9}
+  .hint{display:none}
+}
 </style>
 </head>
 <body>
