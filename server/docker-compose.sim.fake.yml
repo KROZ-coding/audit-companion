@@ -1,0 +1,16 @@
+# 零消耗开关(可选):叠加在本文件后,模拟实例改用内置假模型(不消耗真实额度)。
+# 适用:重跑全量学期模拟、批量调试流程。日常使用请保持默认(真实模型,见用户定规)。
+# 用法:
+#   docker compose -f docker-compose.sim.yml -f docker-compose.sim.fake.yml up -d   # 切假模型
+#   docker compose -f docker-compose.sim.yml up -d                                  # 切回真实模型(默认)
+services:
+  sim-app:
+    environment:
+      SKIP_ENV_FILE: "1"                    # 不读 server/.env
+      LLM_BASE_URL: http://sim-llm:9000     # 三件套指向内置假模型
+      LLM_API_KEY: sim-key
+      LLM_MODEL: sim-model
+      LLM_REASONING_EFFORT: "none"
+      LLM_MAX_TOKENS: "4000"
+      CHAT_DAILY_LIMIT: "100000"            # 假模型不耗额度,放开以兼容全量模拟
+      REGISTRATION_RATE_LIMIT: "100000"
