@@ -13,7 +13,7 @@ services:
     container_name: audit-sim-llm
     command: python sim_llm_server.py --host 0.0.0.0 --port 9000
     volumes:
-      - .:/app/server
+      - ..:/app:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9000/healthz', timeout=3)"]
       interval: 5s
@@ -42,7 +42,7 @@ services:
     ports:
       - "${SIM_PORT:-18000}:8000"
     volumes:
-      - .:/app/server
+      - ..:/app:ro
       - ./sim-data:/data
       - ./data/knowledge/index.pkl:/data/knowledge/index.pkl:ro
     depends_on:
