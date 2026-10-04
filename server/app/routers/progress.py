@@ -259,11 +259,12 @@ def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
     """按权限聚合课程数据快照(纯代码取数,模型只读摘要)。"""
     course = store.courses[course_id]
     students = store.students_for_course(course_id)
+    results_by_session = {r.session_id: r for r in store.results.values()}
     roster = []
     for student in students:
         sessions = [s for s in store.quiz_sessions.values() if s.user_id == student.id and s.course_id == course_id]
         graded = [s for s in sessions if s.status in {"graded", "needs_review"}]
-        results = [store.results[s.id] for s in graded if s.id in store.results]
+        results = [results_by_session[s.id] for s in graded if s.id in results_by_session]
         total_score = sum(r.total for r in results)
         max_score = sum(r.max_total for r in results)
         pending = sum(1 for r in results if r.status == "needs_review")

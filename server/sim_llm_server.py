@@ -129,11 +129,81 @@ def report_markdown(text: str) -> str:
     )
 
 
-def insight_markdown(text: str) -> str:
-    return (
-        "整体来看,班级测验完成度尚可,答疑活跃。建议优先关注待复核名单与"
-        "薄弱知识点(见服务端统计),对长期未作答的学生单独提醒。(模拟解读)"
-    )
+def _parse_insight(text: str):
+    """从 ai-insight 提示词里取出服务端快照:学生 JSON、薄弱/较好知识点、教师提问。"""
+    def pairs(segment: str):
+        return [(name, float(avg)) for name, avg in re.findall(r"\('([^']+)',\s*([0-9.]+)\)", segment)]
+
+    try:
+        segment = text.split("学生数据", 1)[1]
+        start = segment.find("[")
+        end = segment.find("薄弱知识点")
+        students = json.loads(segment[start:end].strip()) if 0 <= start < end else []
+        weak_seg, _, strong_seg = text.partition("掌握较好知识点")
+        weak, strong = pairs(weak_seg), pairs(strong_seg)
+        question = ""
+        if "教师提问" in text:
+            tail = text.split("教师提问", 1)[1].lstrip(":：").strip()
+            question = tail.split("\n", 1)[0].strip()
+        return students, weak, strong, question
+    except (IndexError, ValueError, json.JSONDecodeError):
+        return [], [], [], ""
+
+
+def insight_text(text: str) -> str:
+    students, weak, strong, question = _parse_insight(text)
+    if not students:
+        return "班级数据快照为空,请稍后再试。(模拟解读)"
+
+    def ratio(student):
+        return student.get("score_ratio")
+
+    if "完成度" in question:
+        ranked = sorted(students, key=lambda s: (s.get("quiz_count") or 0, s.get("ask_count") or 0))[:3]
+        parts = []
+        for student in ranked:
+            part = f"{student['name']} 完成 {student.get('quiz_count', 0)} 次测验"
+            part += f",得分率 {round(ratio(student) * 100)}%" if ratio(student) is not None else ",暂无成绩"
+            parts.append(part)
+        return "完成度最低的三位:" + ";".join(parts) + "。建议单独提醒并督促补交。(模拟解读,数据来自服务端快照)"
+
+    if "薄弱" in question:
+        if weak:
+            listed = ", ".join(f"{name}({avg:.1f}分)" for name, avg in weak[:3])
+            return f"最薄弱的知识点是{listed}。建议优先补{weak[0][0]},客观题巩固后再追问一次主观题。(模拟解读)"
+        if strong:
+            softest = strong[-1]
+            return f"目前没有均分低于 60 的知识点;相对而言{softest[0]}稍弱({softest[1]:.1f}分),可以适当巩固。(模拟解读)"
+        return "暂无知识点掌握度数据,等更多测验提交后再看。(模拟解读)"
+
+    if "答疑" in question:
+        active = sorted(students, key=lambda s: s.get("ask_count") or 0, reverse=True)[:3]
+        parts = []
+        for student in active:
+            recent = (student.get("recent_questions") or [{}])[0].get("question", "")
+            part = f"{student['name']} 问了 {student.get('ask_count', 0)} 次"
+            part += f"(最近:{recent[:20]})" if recent else ""
+            parts.append(part)
+        return "答疑概况:" + ";".join(parts) + "。(模拟解读)"
+
+    if "复核" in question:
+        waiting = [s for s in students if s.get("pending_review")]
+        if waiting:
+            return "等你复核:" + "、".join(f"{s['name']}({s['pending_review']}题)" for s in waiting[:5]) + "。其余学生的结果已定稿。(模拟解读)"
+        return "当前没有待复核的主观题。(模拟解读)"
+
+    if "提醒" in question:
+        weakest = weak[0][0] if weak else (strong[-1][0] if strong else "审计证据")
+        behind = [s for s in students if not s.get("quiz_count")]
+        if behind:
+            names = "、".join(s["name"] for s in behind[:3])
+            return f"同学们:{weakest}是当前共同短板,{names}还未完成测验,请本周内补齐并复习错题。(模拟解读)"
+        return f"同学们:{weakest}是当前共同短板,请结合近期错题针对性复习,有问题随时问助教。(模拟解读)"
+
+    scored = [ratio(s) for s in students if ratio(s) is not None]
+    average = round(sum(scored) / len(scored) * 100) if scored else 0
+    tail = f"最薄弱的知识点是{weak[0][0]}。" if weak else "暂无明显薄弱知识点。"
+    return f"全班 {len(students)} 人,平均得分率约 {average}%;{tail}(模拟解读)"
 
 
 def chat_json(text: str) -> str:
@@ -165,7 +235,7 @@ def build_content(body: dict) -> str:
     if "学情报告" in text and "掌握情况" in text:
         return report_markdown(text)
     if "教学助教" in text:
-        return insight_markdown(text)
+        return insight_text(text)
     return chat_json(text)
 
 
