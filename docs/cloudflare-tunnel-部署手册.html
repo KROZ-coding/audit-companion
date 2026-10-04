@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloudflare Tunnel 内网穿透部署手册 · audit-companion</title>
+<style>
+  :root {
+    --ink: #1f2933;
+    --muted: #52606d;
+    --line: #e4e7eb;
+    --bg: #f7f9fb;
+    --card: #ffffff;
+    --brand: #0b5fff;
+    --brand-soft: #eaf1ff;
+    --ok: #0a7d43;
+    --ok-soft: #e6f6ee;
+    --warn: #b45309;
+    --warn-soft: #fdf3e3;
+    --bad: #b42318;
+    --bad-soft: #fdeceb;
+    --code-bg: #0f172a;
+    --code-ink: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.75;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #0b3b8f, #0b5fff);
+    color: #fff;
+    border-radius: 16px;
+    padding: 36px 32px;
+    margin-bottom: 32px;
+  }
+  header.hero h1 { margin: 0 0 10px; font-size: 28px; }
+  header.hero p { margin: 4px 0; opacity: .92; }
+  h2 {
+    font-size: 21px;
+    margin: 44px 0 14px;
+    padding-left: 12px;
+    border-left: 5px solid var(--brand);
+  }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p, li { color: var(--ink); }
+  .muted { color: var(--muted); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin: 14px 0;
+  }
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 26px 0 6px;
+  }
+  .step .num {
+    width: 30px; height: 30px;
+    background: var(--brand); color: #fff;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; flex: none;
+  }
+  .step h3 { margin: 0; }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  code.inline {
+    background: var(--brand-soft);
+    color: #0b3b8f;
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-size: 13.5px;
+    font-family: Consolas, "Courier New", monospace;
+    word-break: break-all;
+  }
+  pre code { font-family: Consolas, "Courier New", monospace; }
+  .tip, .warn, .danger {
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 14.5px;
+  }
+  .tip   { background: var(--ok-soft);   border: 1px solid #bfe6d0; color: var(--ok); }
+  .warn  { background: var(--warn-soft); border: 1px solid #f3d9a9; color: var(--warn); }
+  .danger{ background: var(--bad-soft);  border: 1px solid #f3c1bd; color: var(--bad); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card);
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 14px;
+    margin: 12px 0;
+  }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: #eef2f7; white-space: nowrap; }
+  .flow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px; margin: 14px 0;
+    font-size: 14px; font-weight: 600;
+  }
+  .flow .node {
+    background: var(--brand-soft); color: #0b3b8f;
+    border-radius: 8px; padding: 8px 14px; white-space: nowrap;
+  }
+  .flow .arrow { color: var(--muted); }
+  .check { list-style: none; padding-left: 0; }
+  .check li { padding-left: 28px; position: relative; margin: 6px 0; }
+  .check li::before {
+    content: "✓"; position: absolute; left: 4px; color: var(--ok); font-weight: 700;
+  }
+  details {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 16px; margin: 10px 0;
+  }
+  summary { font-weight: 700; cursor: pointer; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Cloudflare Tunnel 内网穿透部署手册</h1>
+  <p>适用对象：audit-companion 智能学伴平台（Windows 本机部署）</p>
+  <p>整理日期：2026-10-05 · 基于 2026-10-04 实操成功记录整理</p>
+</header>
+
+<h2>一、原理：流量是怎么走到你电脑上的</h2>
+<div class="flow">
+  <span class="node">用户浏览器</span><span class="arrow">→</span>
+  <span class="node">Cloudflare 全球节点<br><span class="muted" style="font-weight:400">audit-companion.xyz</span></span><span class="arrow">→</span>
+  <span class="node">Cloudflare Tunnel 加密隧道</span><span class="arrow">→</span>
+  <span class="node">本机 cloudflared 连接器</span><span class="arrow">→</span>
+  <span class="node">本机应用<br><span class="muted" style="font-weight:400">localhost:8000</span></span>
+</div>
+<p>关键点：cloudflared 只从<b>内网向外</b>发起连接（outbound-only），你的电脑<b>不需要公网 IP、不需要开端口、不需要备案</b>。HTTPS 证书由 Cloudflare 自动签发。</p>
+
+<h2>二、你当前环境的既定参数（直接抄）</h2>
+<div class="card">
+<table>
+  <tr><th>项目</th><th>值</th></tr>
+  <tr><td>公网域名</td><td><code class="inline">audit-companion.xyz</code></td></tr>
+  <tr><td>域名注册商</td><td>阿里云（实名认证已通过）</td></tr>
+  <tr><td>Cloudflare 账号</td><td>Kroz2712@gmail.com（账户 id 546f6630…b0f）</td></tr>
+  <tr><td>Cloudflare 分配的 NS</td><td><code class="inline">gabe.ns.cloudflare.com</code> / <code class="inline">joyce.ns.cloudflare.com</code></td></tr>
+  <tr><td>Zero Trust 团队名</td><td><code class="inline">long-morning-2230</code>（Free 计划，$0/月）</td></tr>
+  <tr><td>隧道名称 / ID</td><td><code class="inline">audit-companion</code> / <code class="inline">69f1ebe2-7481-4ca9-9e13-fc54364f5627</code></td></tr>
+  <tr><td>公网路由</td><td>根域名 <code class="inline">audit-companion.xyz</code>，全路径（*）→ <code class="inline">http://localhost:8000</code></td></tr>
+  <tr><td>本机应用端口</td><td>8000（uvicorn，FastAPI）</td></tr>
+  <tr><td>cloudflared 程序</td><td><code class="inline">C:\Program Files (x86)\cloudflared\cloudflared.exe</code>（2026.9.3，winget 安装）</td></tr>
+  <tr><td>隧道 Token 备份</td><td><code class="inline">C:\Users\ASUS\AppData\Local\Temp\cf_tunnel_token.txt</code></td></tr>
+</table>
+</div>
+<div class="danger">Token 等同于隧道的钥匙，谁拿到谁就能把流量指到他的机器。不要把它提交进 Git 仓库、不要发到群里。</div>
+
+<h2>三、全新换一台电脑 / 换一个域名时的完整流程</h2>
+
+<div class="step"><span class="num">0</span><h3>前提清单</h3></div>
+<div class="card">
+<ul class="check">
+  <li>一个 Cloudflare 账号（免费版即可）</li>
+  <li>一个域名（.xyz/.top 之类很便宜；国内注册商买需实名认证）</li>
+  <li>本机能跑你的应用（本项目：Python + uvicorn，端口 8000）</li>
+  <li>能上网（下载 cloudflared 时如 GitHub 超时，直接用 <code class="inline">winget install Cloudflare.cloudflared</code>）</li>
+</ul>
+</div>
+
+<div class="step"><span class="num">1</span><h3>域名侧：实名认证 + 把 DNS 交给 Cloudflare</h3></div>
+<div class="card">
+<ol>
+  <li>在注册商（阿里云：控制台 → 域名 → 点进你的域名）完成<b>实名认证</b>。没通过实名之前域名处于 <code class="inline">client hold</code> 状态，全网无法解析，后面全部白搭。</li>
+  <li>注册/登录 <code class="inline">dash.cloudflare.com</code> → Add a domain → Connect a domain → 输入域名 → 选 <b>Free</b> 计划 → 扫描记录页直接 Continue（新域名本来就没记录）。</li>
+  <li>Cloudflare 会分配两条 NS，例如 <code class="inline">gabe.ns.cloudflare.com</code> / <code class="inline">joyce.ns.cloudflare.com</code>（每账号固定）。</li>
+  <li>回到注册商，找到「DNS 修改 / DNS 服务器设置」，删掉默认的 DNS，替换成 Cloudflare 的两条，保存。</li>
+  <li>等注册局状态里的 <code class="inline">clientHold</code> 消失、NS 生效（几分钟到几小时），Cloudflare 域名页变绿显示 "Your domain is now protected by Cloudflare" 即激活成功。</li>
+</ol>
+<div class="warn">检验 NS 是否真的生效：不要只看注册商后台，去查注册局数据。最稳的办法是在浏览器控制台里访问 RDAP 接口，例如 <code class="inline">https://rdap.centralnic.com/xyz/domain/你的域名</code>，看返回 JSON 的 nameservers 和 status 字段。</div>
+</div>
+
+<div class="step"><span class="num">2</span><h3>Zero Trust：激活（一次性）</h3></div>
+<div class="card">
+<ol>
+  <li>Cloudflare 控制台左侧进 Zero Trust（新版叫 Cloudflare One），首次会要求选套餐，选 <b>Zero Trust Free</b>（$0/月，50 席位）。</li>
+  <li>结账页虽然金额是 $0，但必须<b>绑定支付方式</b>做验证（银联卡 / PayPal / Apple Pay / Google Pay 任一）。填卡号、有效期（月/年）、安全码 = 卡背面 3 位 CVC（不是取款密码）、账单地址，勾选两个同意框，点 Activate。</li>
+  <li>激活后团队名（team name）会自动分配，记下来即可。</li>
+</ol>
+</div>
+
+<div class="step"><span class="num">3</span><h3>创建隧道</h3></div>
+<div class="card">
+<ol>
+  <li>Zero Trust 控制台 → <b>Networks → Tunnels &amp; Mesh</b>（旧路径 /networks/tunnels 已 404）。</li>
+  <li>Add a tunnel → 选 <b>Cloudflared</b> → 起个名字（如 <code class="inline">audit-companion</code>）→ Save tunnel。</li>
+  <li>此时页面给你一条安装命令：<code class="inline">cloudflared.exe service install eyJhIjoi…</code>，其中 <code class="inline">eyJ</code> 开头的一长串就是 <b>Token</b>。点 Copy to clipboard 保存好，下一步要用。</li>
+</ol>
+</div>
+
+<div class="step"><span class="num">4</span><h3>绑定公网路由（Published application route）</h3></div>
+<div class="card">
+<ol>
+  <li>继续向导或事后进隧道详情 → <b>Published application routes</b> → Add a published application route。</li>
+  <li>Subdomain 留空（用根域名），Domain 下拉选你的域名（域名没激活前这里是空的，属正常）。</li>
+  <li>Service：<b>Type 选 HTTP</b>，URL 填 <code class="inline">localhost:8000</code>（注意不带 http:// 前缀，前缀由 Type 表示）。</li>
+  <li>Save。DNS 的 CNAME 记录会自动创建，无需手动加。</li>
+</ol>
+</div>
+
+<div class="step"><span class="num">5</span><h3>本机跑起来（两个进程）</h3></div>
+<div class="card">
+<h3>① 先启动应用</h3>
+<pre><code>cd "D:\deepseek harness document\老师那边的智能体9_2\server"
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
+<p>自检：<code class="inline">curl http://127.0.0.1:8000/health</code>，返回 JSON 即正常。</p>
+
+<h3>② 启动 cloudflared 连接器</h3>
+<pre><code>&amp; "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate run --token 把Token粘贴到这里</code></pre>
+<p>看到 <code class="inline">Registered tunnel connection</code> 字样即连接成功。PowerShell 里执行带引号路径的命令要在前面加 <code class="inline">&amp;</code>；CMD 里直接写路径即可。</p>
+</div>
+
+<div class="step"><span class="num">6</span><h3>验证</h3></div>
+<div class="card">
+<ul class="check">
+  <li>浏览器打开 <code class="inline">https://你的域名/health</code>，能返回应用 JSON。</li>
+  <li>Cloudflare 隧道列表里状态为 <b>Healthy</b>。</li>
+  <li>隧道详情 Connectors 表里出现你的机器（windows_amd64，Connected）。</li>
+</ul>
+</div>
+
+<h2>四、日常恢复：电脑重启后要做什么</h2>
+<div class="card">
+<p>隧道配置、路由、域名这些都存在云端，重启电脑后<b>只需要把两个进程重新跑起来</b>：</p>
+<pre><code>REM 1. 启动应用 (窗口 A)
+cd /d "D:\deepseek harness document\老师那边的智能体9_2\server"
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+REM 2. 启动连接器 (窗口 B, Token 从备份文件里取)
+"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate run --token 你的Token</code></pre>
+</div>
+
+<h2>五、想开机自启、无人值守：装成 Windows 服务</h2>
+<div class="card">
+<p>用<b>管理员身份</b>打开命令提示符（CMD），执行：</p>
+<pre><code>cloudflared service install 你的Token</code></pre>
+<p>之后 cloudflared 会随系统自动启动、断线自动重连，不再需要手动开窗口。卸载服务用 <code class="inline">cloudflared service uninstall</code>。</p>
+<div class="tip">服务只解决 cloudflared 这一环；应用本身（uvicorn）仍是手动跑的。想连应用也常驻，可以用 NSSM 把 uvicorn 注册为服务，或用项目里现成的 <code class="inline">docker-compose.sim.yml</code> 起容器。</div>
+</div>
+
+<h2>六、踩坑实录（照做能省两小时）</h2>
+<div class="card">
+<table>
+  <tr><th>症状 / 坑</th><th>原因与解法</th></tr>
+  <tr><td>域名全网打不开，DNS 查询返回 NXDOMAIN</td><td>注册商侧 <code class="inline">clientHold</code> 状态（实名认证未通过）会暂停解析。去注册商过实名，等状态消失。光改 NS 没用。</td></tr>
+  <tr><td>隧道向导里 Domain 下拉框是空的（No valid options）</td><td>域名还没在 Cloudflare 激活。等 zone Active 后下拉里才会出现。</td></tr>
+  <tr><td>Cloudflare 一直显示 "Waiting for nameserver propagation"</td><td>注册局还没发布你的 NS 或仍有 hold。去 RDAP 查真实状态，别干等控制台。</td></tr>
+  <tr><td>GitHub 下载 cloudflared 超时，gh-proxy 等镜像也失败</td><td>直接 <code class="inline">winget install Cloudflare.cloudflared</code>，走微软源，实测秒装。</td></tr>
+  <tr><td>保存路由时报 "url is required"，明明已经填了</td><td>自动化/输入法填的值没进表单状态。手动点进输入框，逐字敲一遍再保存。</td></tr>
+  <tr><td>本机 nslookup / 直连 DNS 查询被拦截超时</td><td>网络环境限制。改用浏览器上下文 fetch DoH（<code class="inline">https://cloudflare-dns.com/dns-query?name=域名&amp;type=NS</code>，header 带 <code class="inline">accept: application/dns-json</code>）或 RDAP。</td></tr>
+  <tr><td>隧道 Healthy 但公网 502</td><td>本机应用没起，或端口不是 8000。先 <code class="inline">curl 127.0.0.1:8000/health</code> 验应用，再看 cloudflared 日志。</td></tr>
+  <tr><td>本地是 memory 存储环境</td><td>当前以 <code class="inline">environment: development</code> 运行，应用重启后演示数据会重置；正式数据要接持久化配置。</td></tr>
+</table>
+</div>
+
+<h2>七、常用排查命令速查</h2>
+<div class="card">
+<pre><code>REM 应用是否活着
+curl http://127.0.0.1:8000/health
+
+REM cloudflared 连接是否正常(看有没有 Registered / Lost connection)
+tasklist | findstr cloudflared
+
+REM 查域名 NS 是否已切到 Cloudflare(浏览器地址栏直接打开)
+REM https://rdap.centralnic.com/xyz/domain/audit-companion.xyz
+
+REM 重载连接器
+cloudflared tunnel run --token 你的Token
+
+REM 装卸系统服务(管理员 CMD)
+cloudflared service install 你的Token
+cloudflared service uninstall</code></pre>
+</div>
+
+<footer>
+  audit-companion · Cloudflare Tunnel 部署手册 · 由 2026-10-04 实操记录整理生成
+</footer>
+
+</div>
+</body>
+</html>
