@@ -50,16 +50,11 @@ def history(
 
 def _history_rows(store: Store, user_id: str, limit: int, course_id: str | None = None) -> list[dict]:
     results_by_session = {result.session_id: result for result in store.results.values()}
-    sessions = sorted(
-        (
-            session for session in store.quiz_sessions.values()
-            if session.user_id == user_id and session.submitted_at is not None
-            and session.id in results_by_session
-            and (course_id is None or session.course_id == course_id)
-        ),
-        key=lambda session: session.started_at,
-        reverse=True,
-    )
+    # user→sessions 索引查询,不再全量扫 quiz_sessions
+    sessions = [
+        session for session in store.sessions_for_user_course(user_id, course_id)
+        if session.submitted_at is not None and session.id in results_by_session
+    ]
     history_rows: list[dict] = []
     for session in sessions[:limit]:
         result = results_by_session[session.id]
@@ -162,7 +157,7 @@ def create_report(user: User = Depends(get_current_user), store: Store = Depends
         ],
         key=lambda row: row["mastery"],
     )
-    weak = [row for row in rows if row["mastery"] < 60]
+    weak = [row for row in rows if row["attempts"] >= 2 and row["mastery"] < 60]
     recent = [
         {
             "result_id": result.id, "total": result.total,
@@ -276,18 +271,26 @@ def class_progress(course_id: str | None = None, user: User = Depends(require_ro
 
 
 def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
-    """按权限聚合课程数据快照(纯代码取数,模型只读摘要)。"""
+    """按权限聚合课程数据快照(纯代码取数,模型只读摘要)。
+
+    统一口径:名单=当前在班活跃学生;得分率只计已确认(graded)成绩,
+    待复核(needs_review)仅作数量注记;掌握度聚合要求 attempts≥2 且限定当前名单。
+    """
     course = store.courses[course_id]
     students = store.students_for_course(course_id)
+    roster_ids = {student.id for student in students}
     results_by_session = {r.session_id: r for r in store.results.values()}
     roster = []
     for student in students:
-        sessions = [s for s in store.quiz_sessions.values() if s.user_id == student.id and s.course_id == course_id]
-        graded = [s for s in sessions if s.status in {"graded", "needs_review"}]
-        results = [results_by_session[s.id] for s in graded if s.id in results_by_session]
-        total_score = sum(r.total for r in results)
-        max_score = sum(r.max_total for r in results)
-        pending = sum(1 for r in results if r.status == "needs_review")
+        # user→sessions 索引查询,不再全量扫 quiz_sessions
+        graded = [
+            s for s in store.sessions_for_user_course(student.id, course_id)
+            if s.status in {"graded", "needs_review"}
+        ]
+        confirmed = [results_by_session[s.id] for s in graded if s.id in results_by_session and s.status == "graded"]
+        pending_results = [results_by_session[s.id] for s in graded if s.id in results_by_session and s.status == "needs_review"]
+        total_score = sum(r.total for r in confirmed)
+        max_score = sum(r.max_total for r in confirmed)
         asks = [c for c in store.chat_history if c.get("user_id") == student.id and c.get("course_id") == course_id]
         last_ask = asks[-1]["created_at"][:16].replace("T", " ") if asks else None
         recent_questions = [
@@ -298,14 +301,15 @@ def _insight_snapshot(store: Store, user: User, course_id: str) -> dict:
             "name": student.display_name, "username": student.username,
             "quiz_count": len(graded),
             "score_ratio": round(total_score / max_score, 2) if max_score else None,
-            "pending_review": pending,
+            "pending_review": len(pending_results),
             "ask_count": len(asks),
             "last_ask": last_ask,
             "recent_questions": recent_questions,
         })
     mastery: dict[str, list[float]] = {}
     for (uid, mid, point), value in store.mastery.items():
-        if mid == course_id and value.get("attempts", 0) >= 2:
+        # 只聚合当前在班活跃学生,已退课/停用账号的历史数据不再拉偏均值
+        if mid == course_id and uid in roster_ids and value.get("attempts", 0) >= 2:
             mastery.setdefault(point, []).append(value["mastery"])
     weak_points = sorted(
         ((point, round(sum(v) / len(v), 1)) for point, v in mastery.items() if sum(v) / len(v) < 60),

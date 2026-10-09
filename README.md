@@ -74,7 +74,7 @@ LLM_PROVIDERS_JSON=[{"name":"student-primary","channel":"student","base_url":"ht
 
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_smoke.py"   # 95 项测试
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_smoke.py"   # 105 项测试
 .\.venv\Scripts\python.exe verify_llm_channels.py                             # 通道池真实验证
 .\.venv\Scripts\python.exe load_test.py --users 60 --scenario mixed           # 60 人混合压测
 .\.venv\Scripts\python.exe load_test.py --users 60 --scenario practice --fake-llm  # 零 API 消耗
@@ -96,7 +96,7 @@ zip-slip、时延侧信道、Host 投毒等均被防御;生产模式 Host 白名
 audit-companion/
 ├── server/                    # FastAPI 后端
 │   ├── app/                   # 路由、服务、模型、存储
-│   ├── tests/                 # 95 项冒烟与单元测试
+│   ├── tests/                 # 105 项冒烟与单元测试
 │   ├── security_test.py       # 应用层攻击自查(41 项)
 │   ├── security_net_test*.py  # 网络层攻击模拟(16 项)
 │   ├── verify_llm_channels.py # 模型通道真实验证

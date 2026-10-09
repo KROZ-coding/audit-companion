@@ -30,12 +30,14 @@ def list_questions(
     question_type: Literal["single_choice", "multi_choice", "judge", "fill", "short_answer", "case"] | None = Query(default=None, alias="type"),
     difficulty: Literal["easy", "medium", "hard"] | None = None,
     chapter: str | None = None,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=200, ge=1, le=500),
     user: User = Depends(require_roles("teacher", "admin")),
     store: Store = Depends(get_store),
 ) -> list[QuestionOut]:
     if user.role == "teacher" and course_id is not None and not store.can_access_course(user, course_id, teaching=True):
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程题库"})
-    return [
+    rows = [
         question_out(q) for q in store.questions.values()
         if (question_status is None or q.status == question_status)
         and (course_id is None or q.course_id == course_id)
@@ -44,6 +46,10 @@ def list_questions(
         and (chapter is None or q.chapter == chapter)
         and (user.role == "admin" or q.course_id is None or store.can_access_course(user, q.course_id, teaching=True))
     ]
+    if page is None:
+        return rows  # 兼容现有前端全量拉取;题库过千后前端应切换到 page/page_size
+    start = (page - 1) * page_size
+    return rows[start:start + page_size]
 
 
 @router.get("/knowledge-points")

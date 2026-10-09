@@ -17,6 +17,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 ROLE_LABELS = {"student": "学生", "teacher": "教师", "admin": "管理员"}
 
+# 启动时生成一次的假 Argon2 哈希,供不存在用户的登录路径消耗等量 CPU 时序
+DECOY_PASSWORD_HASH = hash_password("decoy-password-for-timing-equalization")
+
 
 @router.post("/login", response_model=LoginResponse)
 async def login(payload: LoginRequest, response: Response, request: Request, store: Store = Depends(get_store)) -> LoginResponse:
@@ -27,7 +30,13 @@ async def login(payload: LoginRequest, response: Response, request: Request, sto
         raise HTTPException(status_code=429, detail={"code": "login_locked", "message": "登录失败次数过多，请稍后再试"})
 
     user = store.find_user_by_username(username)
-    password_valid = await verify_password_async(payload.password, user.password_hash) if user is not None else False
+    if user is not None:
+        password_valid = await verify_password_async(payload.password, user.password_hash)
+    else:
+        # 用户名不存在也要跑一次同强度的假哈希验证,抹平与存在用户的时差,
+        # 防止通过响应时间探测账号是否存在。
+        await verify_password_async(payload.password, DECOY_PASSWORD_HASH)
+        password_valid = False
     if not password_valid:
         attempts, locked = store.record_login_failure(username)
         store.audit("login_failed", None, {

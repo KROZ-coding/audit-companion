@@ -129,6 +129,7 @@ def start(payload: QuizStartRequest, user: User = Depends(get_current_user), sto
     )
     with store.lock:
         store.quiz_sessions[session.id] = session
+        store._index_session_locked(session)
     store.audit("quiz_start", user.id, {"session_id": session.id})
     return QuizSessionOut(
         id=session.id, status=session.status, course_id=session.course_id,
@@ -186,6 +187,7 @@ def assign_quiz(
                 title=payload.title, assigned=True, assignment_id=assignment_id,
             )
             store.quiz_sessions[session.id] = session
+            store._index_session_locked(session)
             session_ids.append(session.id)
         store.assignments[assignment_id] = {
             "id": assignment_id,

@@ -36,7 +36,12 @@ def workbook_bytes(store: Store, user: User, course_id: str | None = None) -> tu
         assignments = deepcopy([item for item in store.assignments.values() if item.get("course_id") in allowed])
         chats = deepcopy([item for item in store.chat_history if item.get("course_id") in allowed])
         roll_calls = deepcopy([item for item in store.roll_calls if item.get("course_id") in allowed])
-        mastery = deepcopy([item for item in store.mastery.items() if item[0][1] in allowed or item[0][1] is None])
+        # 掌握度收窄到本次导出课程的学生:无课程归属的全局键只放行在册学生,
+        # 其他课程学生的 (student_id, None, ...) 历史数据不得随任意课程导出。
+        mastery = deepcopy([
+            item for item in store.mastery.items()
+            if (item[0][1] in allowed or item[0][1] is None) and item[0][0] in student_ids
+        ])
         questions = deepcopy([item for item in store.questions.values() if item.course_id is None or item.course_id in allowed])
         documents = deepcopy([
             item for item in store.documents.values()

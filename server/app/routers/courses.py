@@ -59,11 +59,7 @@ def list_students(
             value for (student_id, mastery_course, _), value in store.mastery.items()
             if student_id == student.id and mastery_course in {course_id, None}
         ]
-        sessions = sorted(
-            (item for item in store.quiz_sessions.values() if item.user_id == student.id and item.course_id == course_id),
-            key=lambda item: item.started_at,
-            reverse=True,
-        )
+        sessions = store.sessions_for_user_course(student.id, course_id)
         graded = [(session, results_by_session[session.id]) for session in sessions if session.id in results_by_session]
         pending_reviews = sum(result.status == "needs_review" for _, result in graded)
         weak_count = sum(item.get("attempts", 0) >= 2 and float(item.get("mastery", 0)) < 60 for item in mastery)
@@ -147,9 +143,26 @@ def enroll_student(
     key = (course_id, student_id)
     if key in store.enrollments:
         raise HTTPException(status_code=409, detail={"code": "already_enrolled", "message": "学生已经加入该课程"})
+    # 与候选名单 GET(list_available_students)同一判定:普通教师不能直接写入
+    # 仅属于其他教师课程的学生,避免绕过 GET 的可见范围限制。
+    if user.role != "admin" and not _enrollment_allowed(store, user, course_id, student):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "该学生属于其他教师的课程，无法添加"})
     store.enrollments[key] = payload.class_name.strip()
     store.audit("enrollment_create", user.id, {"course_id": course_id, "student_id": student_id})
     return {"course_id": course_id, "student": user_out(student), "class_name": store.enrollments[key]}
+
+
+def _enrollment_allowed(store: Store, user: User, course_id: str, student: User) -> bool:
+    """与 list_available_students 的候选过滤保持同一规则:未入班,或已在本教师课程中。"""
+    enrolled_elsewhere = any(sid == student.id for _, sid in store.enrollments)
+    if not enrolled_elsewhere:
+        return True
+    teacher_course_ids = {course.id for course in store.courses_for_user(user)}
+    return any(
+        enrolled_course in teacher_course_ids
+        for enrolled_course, sid in store.enrollments
+        if sid == student.id
+    )
 
 
 @router.delete("/{course_id}/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)

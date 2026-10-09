@@ -143,6 +143,10 @@ class Store:
         self.persistence_path = Path(settings.data_dir) / "store.json"
         self.persistence_enabled = settings.persistence_enabled
         self._needs_migration = False
+        # user→(course_id→sessions) 索引:写路径维护,读路径(名册/学情/快照)查索引,
+        # 消除"每个学生全量扫 quiz_sessions"的 O(N×S) 写法。
+        self._sessions_by_user_course: dict[str, dict[str | None, list[QuizSession]]] = {}
+        self._reindex_sessions_locked()
         loaded = self.persistence_enabled and self._load()
         recovered_grading = False
         if loaded:
@@ -245,6 +249,46 @@ class Store:
     def add_question(self, question: Question) -> None:
         self.questions[question.id] = question
 
+    def _reindex_sessions_locked(self) -> None:
+        """全量重建 user→(course→sessions) 索引(启动/恢复/删除用户后调用)。"""
+        index: dict[str, dict[str | None, list[QuizSession]]] = {}
+        for session in self.quiz_sessions.values():
+            index.setdefault(session.user_id, {}).setdefault(session.course_id, []).append(session)
+        for buckets in index.values():
+            for sessions in buckets.values():
+                sessions.sort(key=lambda item: item.started_at, reverse=True)
+        self._sessions_by_user_course = index
+
+    def _index_session_locked(self, session: QuizSession) -> None:
+        buckets = self._sessions_by_user_course.setdefault(session.user_id, {})
+        sessions = buckets.setdefault(session.course_id, [])
+        sessions.insert(0, session)  # 新会话 started_at 最新,头部插入保持倒序
+
+    def _deindex_session_locked(self, session: QuizSession) -> None:
+        buckets = self._sessions_by_user_course.get(session.user_id)
+        if not buckets:
+            return
+        sessions = buckets.get(session.course_id)
+        if sessions:
+            try:
+                sessions.remove(session)
+            except ValueError:
+                pass
+            if not sessions:
+                buckets.pop(session.course_id, None)
+        if not buckets:
+            self._sessions_by_user_course.pop(session.user_id, None)
+
+    def sessions_for_user_course(self, user_id: str, course_id: str | None) -> list[QuizSession]:
+        """某学生在某课程(或全部课程 course_id=None)的测验会话,按开始时间倒序。"""
+        with self.lock:
+            buckets = self._sessions_by_user_course.get(user_id, {})
+            if course_id is None:
+                merged = [s for sessions in buckets.values() for s in sessions]
+                merged.sort(key=lambda item: item.started_at, reverse=True)
+                return merged
+            return list(buckets.get(course_id, []))
+
     def _prune_expired_sessions_locked(self) -> None:
         """save() 前清扫:过期登录会话 + 超期未提交的随机练习会话(长期运行防无界增长)。"""
         now = time.time()
@@ -258,6 +302,7 @@ class Store:
             and session.started_at < cutoff
         ]
         for sid in stale:
+            self._deindex_session_locked(self.quiz_sessions[sid])
             del self.quiz_sessions[sid]
 
     def save(self) -> bool:
@@ -328,7 +373,9 @@ class Store:
     def restore_archive(self, content: bytes) -> None:
         root = Path(self.settings.data_dir).resolve()
         root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=".restore-", dir=root))
+        # 事务边界:临时目录完成解包+状态校验,全部成功后才统一切换;
+        # 状态恢复与附件复制之间不再留"状态已覆盖、文件半套"的中间态。
+        staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=root))
         try:
             with ZipFile(BytesIO(content)) as package:
                 names = package.namelist()
@@ -356,16 +403,22 @@ class Store:
                 for name in names:
                     if name == "store.json" or name.endswith("/"):
                         continue
-                    destination = temporary / name[6:]
+                    destination = staging / name[6:]
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     with package.open(name) as source, destination.open("wb") as target:
                         shutil.copyfileobj(source, target)
+            # 校验通过:先把附件落到位,再切换内存状态并持久化。
+            # 文件先行的理由:copytree 失败时内存/磁盘状态尚未被改动(整体失败),
+            # 而状态切换成功后同进程内存即生效,不会再有复制步骤可失败。
+            for source_root in staging.iterdir():
+                shutil.copy2(source_root, root / source_root.name) if source_root.is_file() else shutil.copytree(
+                    source_root, root / source_root.name, dirs_exist_ok=True
+                )
             self._restore_state(state)
-            shutil.copytree(temporary, root, dirs_exist_ok=True)
         except (BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError, OSError, TypeError, ValueError):
             raise ValueError("invalid backup archive")
         finally:
-            shutil.rmtree(temporary, ignore_errors=True)
+            shutil.rmtree(staging, ignore_errors=True)
 
     def _restore_state(self, state: dict[str, Any]) -> None:
         self._validate_state_paths(state)
@@ -512,6 +565,7 @@ class Store:
                 self._needs_migration = True
             else:
                 self._needs_migration = False
+            self._reindex_sessions_locked()
 
     def _migrate_learning_data(self) -> None:
         demo_sessions = {
@@ -521,7 +575,9 @@ class Store:
         }
         demo_sessions.discard(None)
         for session_id in demo_sessions:
-            self.quiz_sessions.pop(session_id, None)
+            session = self.quiz_sessions.pop(session_id, None)
+            if session is not None:
+                self._deindex_session_locked(session)
         self.results = {
             key: result for key, result in self.results.items()
             if result.session_id not in demo_sessions

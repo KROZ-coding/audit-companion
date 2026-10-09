@@ -156,6 +156,7 @@ def delete_user(user_id: str, user: User = Depends(require_roles("admin")), stor
             if session.user_id == user_id
         }
         for session_id in session_ids:
+            store._deindex_session_locked(store.quiz_sessions[session_id])
             del store.quiz_sessions[session_id]
         store.results = {
             result_id: result for result_id, result in store.results.items()
