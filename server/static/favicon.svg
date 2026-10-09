@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded-square badge: rx kept in viewBox units so it scales cleanly -->
+  <rect width="32" height="32" rx="7" fill="url(#g)"/>
+  <!-- mortarboard: widened diamond + keystone gap so the board edge survives 16px -->
+  <path fill="#fff" d="M16 7.6 27.4 13.6 16 19.6 4.6 13.6Z"/>
+  <!-- button on top of the board -->
+  <circle cx="16" cy="13.6" r="1.5" fill="#0d9488"/>
+  <!-- cap base: trapezoid tucked under the board, reads as the head-and-shoulders at small size -->
+  <path fill="#fff" opacity=".92" d="M10.6 17.4v3.2c0 2 2.4 3.6 5.4 3.6s5.4-1.6 5.4-3.6v-3.2L16 20Z"/>
+  <!-- tassel: cord from board tip down the right side + hang loop, single smooth stroke -->
+  <path fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" d="M27.4 13.6v7.2"/>
+  <circle cx="27.4" cy="22.4" r="1.6" fill="#fff"/>
+</svg>

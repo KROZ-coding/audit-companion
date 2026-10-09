@@ -21,6 +21,7 @@ FRONTEND_FILES = {
     "课程思政地图.html": "课程思政地图.html",
 }
 VENDOR_DIR = FRONTEND_DIR / "vendor"
+STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 
 def _frontend_route(file_name: str):
@@ -201,6 +202,20 @@ def create_app() -> FastAPI:
 
         application.add_api_route(
             f"/{url_name}", _frontend_route(file_name), methods=["GET"], include_in_schema=False
+        )
+
+    @application.get("/favicon.ico", include_in_schema=False)
+    def favicon_ico() -> FileResponse:
+        return FileResponse(
+            STATIC_DIR / "favicon.ico", media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
+
+    @application.get("/favicon.svg", include_in_schema=False)
+    def favicon_svg() -> FileResponse:
+        return FileResponse(
+            STATIC_DIR / "favicon.svg", media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=604800"},
         )
 
     return application
