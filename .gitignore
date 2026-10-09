@@ -23,3 +23,7 @@ server/sim-data/
 server/sim-run.log
 server/sim_term_excel.xlsx
 server/sim_summary.json
+
+# test-run leftovers
+test-run.log
+server/.test-data/
