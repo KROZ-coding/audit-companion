@@ -1,6 +1,7 @@
 import json
 from asyncio import to_thread
 from datetime import datetime, timezone
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -146,6 +147,12 @@ def student_progress(
 
 @router.post("/report")
 def create_report(user: User = Depends(get_current_user), store: Store = Depends(get_store)) -> dict:
+    # 报告可能触发真实模型调用,必须与答疑/解读共用每日 AI 额度;
+    # 统一生命周期:预留 → 模型调用 → 成功记账 / 未发请求返还。
+    if not store.reserve_chat_call(user.id):
+        store.audit("chat_quota_exceeded", user.id, {"intent": "progress_report"})
+        raise HTTPException(status_code=429, detail={"code": "chat_quota_exceeded", "message": f"今日 AI 使用次数已达上限（{store.settings.chat_daily_limit} 次），请明天再试"})
+    started = perf_counter()
     course_id = None
     rows = sorted(
         [
@@ -177,26 +184,33 @@ def create_report(user: User = Depends(get_current_user), store: Store = Depends
         *(f"- {item}" for item in advice),
     ])
     source = "rule"
-    llm_advice = _llm_advice(store, user, rows, recent)
+    llm_advice, model, token_usage, request_sent = _llm_advice(store, user, rows, recent)
     if llm_advice:
         markdown = llm_advice
-        source = f"llm:{store.settings.llm_model}"
+        source = f"llm:{model or store.settings.llm_model}"
     report = {
         "status": "ready", "source": source,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "markdown": markdown, "mastery": rows, "recent_results": recent,
     }
     store.reports[user.id] = report
-    store.audit("progress_report_request", user.id)
+    outcome = "ok" if llm_advice else ("model_unconfigured" if not request_sent else "model_unavailable")
+    store.record_usage(
+        user.id, "progress_report", model or store.settings.llm_model or "unconfigured",
+        int((perf_counter() - started) * 1000), outcome,
+        prompt_tokens=token_usage["prompt_tokens"], completion_tokens=token_usage["completion_tokens"],
+    )
+    store.audit("progress_report_request", user.id, {"source": source})
     return {"user_id": user.id, "report": report}
 
 
-def _llm_advice(store: Store, user: User, rows: list[dict], recent: list[dict]) -> str | None:
+def _llm_advice(store: Store, user: User, rows: list[dict], recent: list[dict]) -> tuple[str | None, str | None, dict[str, int], bool]:
+    """尝试生成模型报告;返回(文本, 模型, token用量, 是否真的发出了请求)。"""
     from ..services.llm_client import LLMClient
 
     client = LLMClient(store.settings, channel="teacher" if user.role in {"teacher", "admin"} else "student")
     if not client.configured or not rows:
-        return None
+        return None, None, {"prompt_tokens": 0, "completion_tokens": 0}, False
     mastery_lines = "\n".join(
         f"- {row['knowledge_point']}：{row['mastery']:.1f} 分（练习 {row['attempts']} 次）" for row in rows
     )
@@ -207,7 +221,12 @@ def _llm_advice(store: Store, user: User, rows: list[dict], recent: list[dict]) 
         "## 学习建议（3~5 条具体可执行的动作）。只输出 Markdown 正文。"
     )
     text = client.complete([{"role": "user", "content": prompt}], temperature=0.4)
-    return text.strip() if text and text.strip() else None
+    return (
+        text.strip() if text and text.strip() else None,
+        client.last_model,
+        client.last_usage,
+        client.last_request_sent,
+    )
 
 
 @router.get("/class")
@@ -322,6 +341,8 @@ async def ai_insight(
         raise HTTPException(status_code=429, detail={"code": "chat_quota_exceeded", "message": "今日 AI 次数已达上限"})
     snapshot = _insight_snapshot(store, user, course_id)
     if not snapshot["student_count"]:
+        # 业务校验失败,模型请求尚未发出,返还额度避免空耗每日次数
+        store.release_chat_call(user.id)
         raise HTTPException(status_code=409, detail={"code": "no_students", "message": "课程里还没有学生"})
     prompt = (
         f"你是《审计学》课程的教学助教。课程:{snapshot['course']},共 {snapshot['student_count']} 名学生。\n"
@@ -340,6 +361,9 @@ async def ai_insight(
     usage = getattr(client, "last_usage", {"prompt_tokens": 0, "completion_tokens": 0})
     model = getattr(client, "last_model", None) or store.settings.llm_model or "unconfigured"
     if not text or not text.strip():
+        if not client.last_request_sent:
+            # 模型未配置/未发出请求:返还额度,只记失败用量
+            store.release_chat_call(user.id)
         outcome = f"model_{getattr(client, 'last_error', None) or 'unavailable'}"
         store.record_usage(user.id, "ai_insight", model, 0, outcome, course_id=course_id)
         raise HTTPException(status_code=503, detail={"code": "model_unavailable", "message": "本次解读生成失败,请稍后重试"})

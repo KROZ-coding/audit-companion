@@ -2675,6 +2675,121 @@ class SmokeTests(unittest.TestCase):
         response = self.client.post("/api/practice/generate", json={"count": 3})
         self.assertEqual(response.status_code, 403)
 
+    def test_shared_tpm_quota_no_refund_when_acquire_rejected(self) -> None:
+        """上游配额回归:acquire 被拒(余额不足等待超时)时不得退款,否则桶余额凭空增加。"""
+        provider = LLMProvider(
+            "no-refund-test", "shared", "https://norefund.test/v1", "key", "model", 4, 8, 1, "no-refund-test-unique", tpm_limit=100,
+        )
+        settings = Settings(
+            llm_base_url="", llm_api_key="", llm_model="", llm_providers=(provider,),
+            llm_token_output_estimate=0, llm_queue_timeout_seconds=0.2, llm_total_timeout_seconds=5,
+        )
+        calls = 0
+
+        def relay(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 5}}, request=request)
+
+        original_client = httpx.Client
+        with patch(
+            "app.services.llm_client.httpx.Client",
+            side_effect=lambda **kwargs: original_client(transport=httpx.MockTransport(relay), **kwargs),
+        ):
+            # 长消息使预估 104 > 桶容量 100:acquire 预占 min(104,100)=100,实际计 10,
+            # settle 后余额 90。第二笔预估仍 104 > 90,必须被拒;修复前 finally 退款 104
+            # 使余额回到 100(凭空多出),第二笔反而获准。
+            client = LLMClient(settings)
+            first = client.complete([{"role": "user", "content": "x" * 200}])
+            self.assertEqual(first, "ok")
+            second_error = LLMClient(settings).complete([{"role": "user", "content": "x" * 200}])
+            self.assertIsNone(second_error)
+            third_error = LLMClient(settings).complete([{"role": "user", "content": "x" * 200}])
+            self.assertIsNone(third_error, "被拒请求未退款,余额只降不升,第三次仍应被拒")
+
+        self.assertEqual(calls, 1)
+
+    def test_shared_quota_complementary_limits_do_not_cancel_out(self) -> None:
+        """上游配额回归:同组一个只配 RPM 一个只配 TPM,合并后两组限制都必须生效。
+
+        修复前 tighten 对含零维度取 min,把 (rpm=1,tpm=0)+(rpm=0,tpm=100) 合并成 (0,0)
+        ——0 被 acquire 解释为不限额,共享组完全失去保护。
+        """
+        providers = (
+            LLMProvider("lim-rpm", "shared", "https://limrpm.test/v1", "key-a", "model", 4, 8, 1, "lim-shared", rpm_limit=1),
+            LLMProvider("lim-tpm", "shared", "https://limtpm.test/v1", "key-b", "model", 4, 8, 2, "lim-shared", tpm_limit=100),
+        )
+        settings = Settings(
+            llm_base_url="", llm_api_key="", llm_model="", llm_providers=providers,
+            llm_token_output_estimate=50, llm_queue_timeout_seconds=0.2, llm_total_timeout_seconds=5,
+        )
+        calls = 0
+        guard = Lock()
+
+        def relay(request):
+            nonlocal calls
+            with guard:
+                calls += 1
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]}, request=request)
+
+        original_client = httpx.Client
+        with patch(
+            "app.services.llm_client.httpx.Client",
+            side_effect=lambda **kwargs: original_client(transport=httpx.MockTransport(relay), **kwargs),
+        ):
+            from app.services.llm_client import _quota_for
+            quota_a = _quota_for(providers[0])
+            quota_b = _quota_for(providers[1])
+            self.assertIs(quota_a, quota_b, "同 quota_group 必须共享同一个 limiter")
+            # 合并后 (rpm=1, tpm=100):RPM 仍生效,而不是变成 (0,0) 不限额
+            self.assertEqual(quota_a.rpm, 1)
+            self.assertEqual(quota_a.tpm, 100)
+
+    def test_report_consumes_chat_quota_and_records_usage(self) -> None:
+        """业务额度回归:学情报告必须计入每日 AI 额度并写用量日志,超限时 429。"""
+        store = self.app.state.store
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"})
+        user_id = self.client.get("/api/auth/me").json()["id"]
+        object.__setattr__(store.settings, "chat_daily_limit", 2)
+
+        responses = [self.client.post("/api/progress/report") for _ in range(3)]
+        self.assertEqual([r.status_code for r in responses], [200, 200, 429])
+        self.assertEqual(responses[2].json()["code"], "chat_quota_exceeded")
+        self.assertEqual(store.chat_quota[user_id]["count"], 2)
+        report_intents = [item for item in store.usage_logs if item["user_id"] == user_id and item["intent"] == "progress_report"]
+        self.assertEqual(len(report_intents), 2)
+
+    def test_ai_insight_releases_quota_when_no_students(self) -> None:
+        """业务额度回归:空班的 ai-insight 未发出模型请求,必须返还当日额度。"""
+        store = self.app.state.store
+        self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"})
+        teacher_id = self.client.get("/api/auth/me").json()["id"]
+        store.enrollments = {key: name for key, name in store.enrollments.items() if key[0] != "audit-101"}
+        object.__setattr__(store.settings, "chat_daily_limit", 2)
+
+        first = self.client.post("/api/progress/ai-insight", json={"course_id": "audit-101", "question": "班级情况如何?"})
+        second = self.client.post("/api/progress/ai-insight", json={"course_id": "audit-101", "question": "班级情况如何?"})
+        self.assertEqual(first.status_code, 409)
+        self.assertEqual(second.status_code, 409, "额度已返还,第二次仍应到达业务校验而不是 429")
+        self.assertNotIn(teacher_id, store.chat_quota)
+
+    def test_ai_insight_releases_quota_when_model_unconfigured(self) -> None:
+        """业务额度回归:模型未配置的失败路径未发出请求,同样返还额度。"""
+        store = self.app.state.store
+        self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"})
+        teacher_id = self.client.get("/api/auth/me").json()["id"]
+        object.__setattr__(store.settings, "chat_daily_limit", 2)
+        object.__setattr__(store.settings, "llm_base_url", "")
+        object.__setattr__(store.settings, "llm_api_key", "")
+        object.__setattr__(store.settings, "llm_model", "")
+        object.__setattr__(store.settings, "llm_providers", ())
+
+        first = self.client.post("/api/progress/ai-insight", json={"course_id": "audit-101", "question": "班级情况如何?"})
+        second = self.client.post("/api/progress/ai-insight", json={"course_id": "audit-101", "question": "班级情况如何?"})
+        self.assertEqual(first.status_code, 503)
+        self.assertEqual(second.status_code, 503, "额度已返还,不应触发 429")
+        self.assertNotIn(teacher_id, store.chat_quota)
+
 
 if __name__ == "__main__":
     unittest.main()
