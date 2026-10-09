@@ -113,7 +113,9 @@ def create_app() -> FastAPI:
     async def persist_state(request: Request, call_next):
         response = await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            saved = await application.state.store.save_async()
+            # 端点内已显式保存成功的写请求(quiz submit/draft 等)不再重复落盘:
+            # store 以 dirty 计数追踪自上次成功保存后的状态变更。
+            saved = await application.state.store.save_if_dirty_async()
             if not saved:
                 return JSONResponse(status_code=503, content={"code": "persistence_failed", "message": "业务数据暂未可靠保存，请联系管理员"})
         return response

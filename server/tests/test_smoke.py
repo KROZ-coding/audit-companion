@@ -2790,6 +2790,40 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(second.status_code, 503, "额度已返还,不应触发 429")
         self.assertNotIn(teacher_id, store.chat_quota)
 
+    def test_store_dirty_tracking_skips_duplicate_save(self) -> None:
+        """持久化回归:写请求经中间件保存后,无新脏数据不应重复落盘。"""
+        with TemporaryDirectory() as data_dir:
+            settings = Settings(app_env="development", data_dir=data_dir, persistence_enabled=True, cookie_secure=False)
+            store = Store(settings)
+            self.assertTrue(store.persistence_enabled)
+            # 初始种子写盘后 dirty 为 0
+            store.save()
+            first_mtime = store.persistence_path.stat().st_mtime_ns
+            # 无任何写入:save_if_dirty 直接跳过,文件不变
+            self.assertTrue(store.save_if_dirty())
+            self.assertEqual(store.persistence_path.stat().st_mtime_ns, first_mtime)
+            # 一次业务写入(audit)产生脏数据 → 保存 → 文件更新且 dirty 清零
+            store.audit("dirty_probe", None)
+            self.assertGreaterEqual(store._dirty, 1)
+            self.assertTrue(store.save_if_dirty())
+            self.assertEqual(store._dirty, 0)
+            self.assertGreater(store.persistence_path.stat().st_mtime_ns, first_mtime)
+            # 显式 save 后中间件层面的 save_if_dirty 同样跳过(端点+中间件去重语义)
+            store.audit("dirty_probe2", None)
+            self.assertTrue(store.save())
+            self.assertEqual(store._dirty, 0)
+            self.assertTrue(store.save_if_dirty())
+
+    def test_store_save_failure_marks_dirty_again(self) -> None:
+        """持久化回归:落盘失败必须重新标记脏,否则后续 save_if_dirty 会漏掉这批数据。"""
+        with TemporaryDirectory() as data_dir:
+            settings = Settings(app_env="development", data_dir=data_dir, persistence_enabled=True, cookie_secure=False)
+            store = Store(settings)
+            store.audit("before_fail", None)
+            with patch.object(Store, "save", return_value=False):
+                self.assertFalse(store.save())
+                self.assertGreaterEqual(store._dirty, 1, "save 失败后 dirty 不得清零")
+
 
 if __name__ == "__main__":
     unittest.main()

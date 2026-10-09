@@ -1,6 +1,5 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict
 from io import BytesIO
@@ -120,6 +119,7 @@ class Store:
         self.registration_attempts: dict[str, list[float]] = {}
         self.lock = RLock()
         self._save_lock = RLock()
+        self._dirty = 0  # 自上次成功落盘以来的写入计数;0 表示磁盘与内存一致
         self.courses: dict[str, Course] = {}
         self.enrollments: dict[tuple[str, str], str] = {}
         self.questions: dict[str, Question] = {}
@@ -263,19 +263,23 @@ class Store:
     def save(self) -> bool:
         if not self.persistence_enabled:
             return True
-        with self.lock:
-            self._prune_expired_sessions_locked()
         temporary = self.persistence_path.with_name(f".{self.persistence_path.name}.{uuid4().hex}.tmp")
         try:
             with self._save_lock:
+                # _state 与 dumps 同持 store.lock:快照一致性由锁保证,不再整体 deepcopy
+                # (3.8MB 数据实测 deepcopy 占序列化总耗时约 85%)。dumps 期间写请求会短暂排队,
+                # 单写线程仍串行落盘,原子 replace 语义不变。
                 with self.lock:
-                    state = deepcopy(self._state())
-                encoded = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                    self._prune_expired_sessions_locked()
+                    encoded = json.dumps(self._state(), ensure_ascii=False, separators=(",", ":"))
+                    self._dirty = 0
                 self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary.write_text(encoded, encoding="utf-8")
                 temporary.replace(self.persistence_path)
             return True
         except (OSError, TypeError, ValueError, RuntimeError):
+            with self.lock:
+                self._dirty += 1
             return False
         finally:
             try:
@@ -287,6 +291,20 @@ class Store:
         if not self.persistence_enabled:
             return True
         return await asyncio.get_running_loop().run_in_executor(_STORE_WRITER, self.save)
+
+    async def save_if_dirty_async(self) -> bool:
+        if not self.persistence_enabled:
+            return True
+        return await asyncio.get_running_loop().run_in_executor(_STORE_WRITER, self.save_if_dirty)
+
+    def save_if_dirty(self) -> bool:
+        """自上次成功落盘后有新写入才保存;无新脏数据直接成功(供写请求去重)。"""
+        if not self.persistence_enabled:
+            return True
+        with self.lock:
+            if self._dirty == 0:
+                return True
+        return self.save()
 
     def export_json(self) -> str:
         return json.dumps(self._state(include_runtime=False), ensure_ascii=False, indent=2)
@@ -356,6 +374,7 @@ class Store:
             self._apply_state(state, include_runtime=False)
             if not self.save():
                 raise OSError("store state could not be persisted")
+            # save() 成功已把 dirty 清零;回滚路径恢复的是上一版状态,同样由随后的 save 记账
             self._needs_migration = False
         except Exception:
             self._apply_state(previous, include_runtime=True)
@@ -757,6 +776,7 @@ class Store:
         ip: str | None = None,
     ) -> None:
         with self.lock:
+            self._dirty += 1  # 每条业务日志伴随一次状态变更;save() 成功后清零,供写请求去重
             self.audit_logs.append({
                 "id": len(self.audit_logs) + 1,
                 "at": datetime.now(timezone.utc).isoformat(),
@@ -782,6 +802,7 @@ class Store:
         completion_tokens: int = 0,
     ) -> None:
         with self.lock:
+            self._dirty += 1  # 用量日志也是持久化状态的一部分
             self.usage_logs.append({
                 "at": datetime.now(timezone.utc).isoformat(),
                 "user_id": user_id,
