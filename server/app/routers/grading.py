@@ -91,12 +91,13 @@ def review(result_id: str, payload: ReviewGradeRequest, user: User = Depends(req
     if session is None:
         raise HTTPException(status_code=404, detail={"code": "quiz_not_found", "message": "测验不存在"})
     _check_teacher_access(session.course_id, user, store)
-    pending = next((item for item in result.per_question if item["question_id"] == payload.question_id and item["method"] == "manual_pending"), None)
-    if pending is None:
-        raise HTTPException(status_code=409, detail={"code": "no_review_needed", "message": "没有待复核的主观题"})
-    if payload.score > pending["max_score"]:
-        raise HTTPException(status_code=422, detail={"code": "score_exceeds_max", "message": "得分不能超过题目满分"})
     with store.lock:
+        # manual_pending 检查必须与改分同锁:锁外检查会让并发复核双双通过后相互覆盖。
+        pending = next((item for item in result.per_question if item["question_id"] == payload.question_id and item["method"] == "manual_pending"), None)
+        if pending is None:
+            raise HTTPException(status_code=409, detail={"code": "no_review_needed", "message": "没有待复核的主观题"})
+        if payload.score > pending["max_score"]:
+            raise HTTPException(status_code=422, detail={"code": "score_exceeds_max", "message": "得分不能超过题目满分"})
         previous_score = pending["score"]
         pending["score"] = payload.score
         pending["method"] = "teacher"

@@ -105,10 +105,13 @@ class _QuotaLimiter:
 
     def tighten(self, rpm: int, tpm: int) -> None:
         with self._condition:
-            self.rpm = min(self.rpm, max(0, int(rpm)))
-            self.tpm = min(self.tpm, max(0, int(tpm)))
-            self._rpm_tokens = min(self._rpm_tokens, float(self.rpm))
-            self._tpm_tokens = min(self._tpm_tokens, float(self.tpm))
+            # 0 表示"该维度未配置约束",不能把已配置的限额收紧成 0(0 会被 acquire 解释为不限额)。
+            if rpm > 0:
+                self.rpm = min(self.rpm, int(rpm)) if self.rpm else int(rpm)
+                self._rpm_tokens = min(self._rpm_tokens, float(self.rpm))
+            if tpm > 0:
+                self.tpm = min(self.tpm, int(tpm)) if self.tpm else int(tpm)
+                self._tpm_tokens = min(self._tpm_tokens, float(self.tpm))
             self._condition.notify_all()
 
     def _refill_locked(self) -> None:
@@ -227,7 +230,16 @@ def _set_cooldown(provider: LLMProvider, seconds: float, reason: str) -> None:
 
 def _clear_cooldown(provider: LLMProvider) -> None:
     with _COOLDOWN_LOCK:
-        _COOLDOWNS.pop(_cooldown_key(provider, "rate_limited"), None)
+        _COOLDOWNS.pop(_cooldown_key(provider), None)
+
+
+def _refresh_cooldown(provider: LLMProvider) -> None:
+    """成功响应只清除 provider 自身的冷却;组级 429 冷却保留至到期,遵守 Retry-After。
+
+    旧实现无条件清空 quota:{group},使并发场景下较晚收到的成功响应
+    抹掉其他 in-flight 请求刚设置的组级限流冷却,继续放大 429。
+    """
+    with _COOLDOWN_LOCK:
         _COOLDOWNS.pop(_cooldown_key(provider), None)
 
 
@@ -322,6 +334,26 @@ def _combined_error(errors: list[str]) -> str:
 
 _ASYNC_CLIENTS: "weakref.WeakKeyDictionary[Any, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
 _ASYNC_CLIENT_LOCK = Lock()
+
+_SYNC_CLIENT: httpx.Client | None = None
+_SYNC_CLIENT_LOCK = Lock()
+_SYNC_CLIENT_SOURCE: Any = None  # 建缓存时的 httpx.Client 属性对象;测试 patch 后对象变化,缓存自动失效
+
+
+def _shared_sync_client() -> httpx.Client:
+    """进程级复用同步 Client:避免批改循环里每次尝试重建 SSL 上下文(约 0.5~2s/次)。
+
+    单次请求超时通过 per-request 传参覆盖,不受 Client 默认超时约束。
+    测试通过 patch app.services.llm_client.httpx.Client 注入 MockTransport:
+    属性对象与建缓存时不一致(被替换/已恢复)即重建,保证注入的 transport 生效。
+    """
+    global _SYNC_CLIENT, _SYNC_CLIENT_SOURCE
+    factory = httpx.Client
+    with _SYNC_CLIENT_LOCK:
+        if _SYNC_CLIENT is None or _SYNC_CLIENT.is_closed or _SYNC_CLIENT_SOURCE is not factory:
+            _SYNC_CLIENT = factory()
+            _SYNC_CLIENT_SOURCE = factory
+        return _SYNC_CLIENT
 
 
 def _shared_async_client() -> httpx.AsyncClient:
@@ -463,6 +495,7 @@ class LLMClient:
             gate = _gate_for(provider)
             quota = _quota_for(provider)
             tpm_estimate = 0
+            quota_reserved = False
             if monotonic() >= request_deadline:
                 errors.append("timeout")
                 break
@@ -479,16 +512,19 @@ class LLMClient:
                     tpm_estimate = _estimate_tokens(messages, self.settings.llm_token_output_estimate)
                     quota_timeout = max(min(queue_deadline, request_deadline) - monotonic(), 0)
                     if not quota.acquire(tpm_estimate, quota_timeout):
+                        tpm_estimate = 0
                         errors.append("rate_limited")
                         logger.warning("LLM provider %s local quota (rpm/tpm) exhausted; failing over", provider.name)
                         continue
+                    quota_reserved = True
                 payload = self._payload(provider, messages, temperature, json_mode)
                 try:
                     remaining = request_deadline - monotonic()
                     if remaining <= 0:
                         raise httpx.TimeoutException("LLM total timeout exceeded")
                     timeout = min(self.settings.llm_timeout_seconds, remaining)
-                    with httpx.Client(timeout=timeout) as client:
+                    client = _shared_sync_client()
+                    if True:
                         self.last_request_sent = True
                         response = client.post(
                             self._completion_url(provider),
@@ -530,7 +566,7 @@ class LLMClient:
                 if response.status_code >= 400:
                     errors.append(self._note_http_failure(provider, response))
                     continue
-                _clear_cooldown(provider)
+                _refresh_cooldown(provider)
                 try:
                     data = response.json()
                 except (ValueError, TypeError):
@@ -546,6 +582,7 @@ class LLMClient:
                     else:
                         quota.refund(tpm_estimate)
                     tpm_estimate = 0
+                    quota_reserved = False
                 if error:
                     errors.append(error)
                     logger.warning(
@@ -564,7 +601,7 @@ class LLMClient:
                 self.last_provider = provider.name
                 return text
             finally:
-                if quota is not None and tpm_estimate:
+                if quota is not None and quota_reserved and tpm_estimate:
                     quota.refund(tpm_estimate)
                 gate.release()
         self._finish(errors)
@@ -631,6 +668,7 @@ class LLMClient:
             gate = _gate_for(provider)
             quota = _quota_for(provider)
             tpm_estimate = 0
+            quota_reserved = False
             if monotonic() >= request_deadline:
                 errors.append("timeout")
                 break
@@ -647,9 +685,11 @@ class LLMClient:
                     tpm_estimate = _estimate_tokens(messages, self.settings.llm_token_output_estimate)
                     quota_timeout = max(min(queue_deadline, request_deadline) - monotonic(), 0)
                     if not await self._acquire_quota_async(quota, tpm_estimate, quota_timeout):
+                        tpm_estimate = 0
                         errors.append("rate_limited")
                         logger.warning("LLM provider %s local quota (rpm/tpm) exhausted; failing over", provider.name)
                         continue
+                    quota_reserved = True
                 payload = self._payload(provider, messages, temperature, json_mode)
                 try:
                     remaining = request_deadline - monotonic()
@@ -705,7 +745,7 @@ class LLMClient:
                 if response.status_code >= 400:
                     errors.append(self._note_http_failure(provider, response))
                     continue
-                _clear_cooldown(provider)
+                _refresh_cooldown(provider)
                 try:
                     data = response.json()
                 except (ValueError, TypeError):
@@ -721,6 +761,7 @@ class LLMClient:
                     else:
                         quota.refund(tpm_estimate)
                     tpm_estimate = 0
+                    quota_reserved = False
                 if error:
                     errors.append(error)
                     logger.warning(
@@ -739,7 +780,7 @@ class LLMClient:
                 self.last_provider = provider.name
                 return text
             finally:
-                if quota is not None and tpm_estimate:
+                if quota is not None and quota_reserved and tpm_estimate:
                     quota.refund(tpm_estimate)
                 gate.release()
         self._finish(errors)
@@ -805,18 +846,24 @@ class LLMClient:
                 errors.append("busy")
                 continue
             response = None
+            quota_reserved = False
+            settled = False
             try:
                 if quota is not None:
                     tpm_estimate = _estimate_tokens(messages, self.settings.llm_token_output_estimate)
                     quota_timeout = max(min(queue_deadline, request_deadline) - monotonic(), 0)
                     if not await self._acquire_quota_async(quota, tpm_estimate, quota_timeout):
+                        tpm_estimate = 0
                         errors.append("rate_limited")
                         continue
+                    quota_reserved = True
                 payload = self._payload(provider, messages, temperature, True)
                 payload["stream"] = True
                 remaining = request_deadline - monotonic()
                 if remaining <= 0:
                     raise asyncio.TimeoutError
+                # 单次读超时必须进 build_request:send(stream=True) 不接受 timeout 参数,
+                # 不传则整个流式请求落在 httpx 默认 5 秒上,中继偶发卡顿会被误判 transport_error。
                 timeout = min(self.settings.llm_timeout_seconds, remaining)
                 client = _shared_async_client()
                 self.last_request_sent = True
@@ -824,8 +871,9 @@ class LLMClient:
                     "POST", self._completion_url(provider),
                     headers={"Authorization": f"Bearer {provider.api_key}"},
                     json=payload,
+                    timeout=timeout,
                 )
-                response = await client.send(request, stream=True)
+                response = await asyncio.wait_for(client.send(request, stream=True), timeout=remaining)
                 if response.status_code >= 400:
                     error = self._note_http_failure(provider, response)
                     errors.append(error)
@@ -875,7 +923,14 @@ class LLMClient:
                     errors.append("invalid_json")
                     logger.warning("LLM provider %s stream produced invalid JSON", provider.name)
                     continue
-                _clear_cooldown(provider)
+                _refresh_cooldown(provider)
+                if quota is not None:
+                    billed = usage_acc["prompt_tokens"] + usage_acc["completion_tokens"]
+                    if billed:
+                        quota.settle(billed, tpm_estimate)
+                    else:
+                        quota.refund(tpm_estimate)
+                    settled = True
                 self.last_provider = provider.name
                 return result
             except (httpx.TimeoutException, asyncio.TimeoutError):
@@ -892,6 +947,9 @@ class LLMClient:
                         await response.aclose()
                     except Exception:
                         pass
+                # 只有确实预占过且未结算的尝试才退款;失败/取消路径同样适用。
+                if quota is not None and quota_reserved and not settled and tpm_estimate:
+                    quota.refund(tpm_estimate)
                 gate.release()
         self._finish(errors)
         return None

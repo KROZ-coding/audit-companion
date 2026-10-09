@@ -15,6 +15,27 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 CHAT_HISTORY_PER_USER = 200  # 单用户答疑历史上限,长期运行防膨胀
 
+
+def _append_chat_history(store: Store, user_id: str, course_id: str | None, question: str, response: dict) -> None:
+    """锁内追加一条答疑记录,并按单用户上限裁剪旧记录。
+
+    /ask 与 /ask/stream 必须共用:只追加不裁剪会让流式路径的历史无界增长。
+    """
+    with store.lock:
+        mine = [item for item in store.chat_history if item["user_id"] == user_id]
+        if len(mine) >= CHAT_HISTORY_PER_USER:
+            drop_ids = {item["id"] for item in mine[:len(mine) - CHAT_HISTORY_PER_USER + 1]}
+            store.chat_history[:] = [item for item in store.chat_history if item["id"] not in drop_ids]
+        store.chat_history.append({
+            "id": str(uuid4()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "important": False,
+            "user_id": user_id,
+            "course_id": course_id,
+            "question": question,
+            "response": response,
+        })
+
 MODEL_FAILURE_REASONS = {
     "not_configured": "model_unconfigured",
     "http_error": "model_http_error",
@@ -102,23 +123,9 @@ async def ask(
         prompt_tokens=token_usage["prompt_tokens"],
         completion_tokens=token_usage["completion_tokens"],
     )
-    with store.lock:
-        mine = [item for item in store.chat_history if item["user_id"] == user.id]
-        if len(mine) >= CHAT_HISTORY_PER_USER:
-            drop_ids = {item["id"] for item in mine[:len(mine) - CHAT_HISTORY_PER_USER + 1]}
-            store.chat_history[:] = [item for item in store.chat_history if item["id"] not in drop_ids]
-        store.chat_history.append({
-            "id": str(uuid4()),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "important": False,
-            "user_id": user.id,
-            "course_id": course_id,
-            "question": payload.question,
-            "response": response.model_dump(),
-        })
+    _append_chat_history(store, user.id, course_id, payload.question, response.model_dump())
     store.audit("chat_ask", user.id, {"degraded": response.degraded, "retrieval": retrieval_source})
     return response
-
 
 @router.get("/history")
 def history(limit: int = Query(default=50, ge=1, le=100), user: User = Depends(get_current_user), store: Store = Depends(get_store)) -> list[dict]:
@@ -275,16 +282,7 @@ async def ask_stream(
                 prompt_tokens=token_usage["prompt_tokens"],
                 completion_tokens=token_usage["completion_tokens"],
             )
-            with store.lock:
-                store.chat_history.append({
-                    "id": str(uuid4()),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "important": False,
-                    "user_id": user.id,
-                    "course_id": course_id,
-                    "question": payload.question,
-                    "response": result,
-                })
+            _append_chat_history(store, user.id, course_id, payload.question, result)
             store.audit("chat_ask", user.id, {"degraded": result["degraded"], "retrieval": retrieval_source, "stream": True})
             yield f"data: {_json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
         except Exception as error:  # 流中异常也要以 error 事件结束,避免前端悬挂

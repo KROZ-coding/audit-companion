@@ -50,6 +50,13 @@ def _source_questions(store: Store, user: User, course_id: str | None, limit: in
     return list(reversed(asked))
 
 
+def _option_index(value: object) -> int | None:
+    """选项下标校验:严格排除 bool(bool 是 int 子类,JSON true/false 不应判为合法下标)。"""
+    if type(value) is not int or isinstance(value, bool):
+        return None
+    return value
+
+
 def _normalize_questions(raw: object, count: int) -> list[dict]:
     if not isinstance(raw, dict):
         return []
@@ -75,12 +82,18 @@ def _normalize_questions(raw: object, count: int) -> list[dict]:
             if len(options) < 2:
                 continue
             if qtype == "single_choice":
-                if not isinstance(answer, int) or not 0 <= answer < len(options):
+                index = _option_index(answer)
+                if index is None or not 0 <= index < len(options):
                     continue
-            elif not isinstance(answer, list) or not answer or not all(
-                isinstance(index, int) and 0 <= index < len(options) for index in answer
-            ) or len(set(answer)) != len(answer):
-                continue
+            else:
+                if not isinstance(answer, list) or not answer:
+                    continue
+                indexes = [_option_index(index) for index in answer]
+                if any(index is None or not 0 <= index < len(options) for index in indexes):
+                    continue
+                if len(set(indexes)) != len(indexes):
+                    continue
+                answer = indexes
         elif qtype == "judge":
             options = ["正确", "错误"]
             if not isinstance(answer, bool):
@@ -124,12 +137,16 @@ def _build_prompt(source: list[str], count: int) -> list[dict[str, str]]:
 
 def _is_correct(qtype: str, given: object, answer: object) -> bool:
     if qtype == "single_choice":
-        return isinstance(given, int) and given == answer
+        index = _option_index(given)
+        return index is not None and index == answer
     if qtype == "multi_choice":
         if not isinstance(given, list) or not isinstance(answer, list):
             return False
+        indexes = [_option_index(index) for index in given]
+        if any(index is None for index in indexes):
+            return False
         try:
-            return sorted(given) == sorted(answer)
+            return sorted(indexes) == sorted(answer)
         except TypeError:
             return False
     if qtype == "judge":

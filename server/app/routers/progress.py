@@ -1,4 +1,5 @@
 import json
+from asyncio import to_thread
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -333,7 +334,9 @@ async def ai_insight(
         "回答用简洁的中文,可用 Markdown 列表;不超过 400 字。"
     )
     client = LLMClient(store.settings, channel="teacher")
-    text = client.complete([{"role": "user", "content": prompt}], temperature=0.3)
+    # complete 是同步阻塞调用(真模型一次可达数十秒),必须放线程池,
+    # 否则 async 路由占死事件循环,全站请求排队。
+    text = await to_thread(client.complete, [{"role": "user", "content": prompt}], temperature=0.3)
     usage = getattr(client, "last_usage", {"prompt_tokens": 0, "completion_tokens": 0})
     model = getattr(client, "last_model", None) or store.settings.llm_model or "unconfigured"
     if not text or not text.strip():

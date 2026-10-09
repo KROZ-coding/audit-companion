@@ -972,8 +972,25 @@ html.dark .note{background:#22304f}
 
 <footer id="appFooter" style="display:none">经管数智审计智能学伴 · 本地运行版</footer>
 
-<script src="vendor/three.min.js"></script>
 <script src="vendor/d3.min.js"></script>
+<script>
+/* ===== three.min.js 懒加载 =====
+   669KB 的 Three.js 只服务登录页粒子海浪,不再首屏全量加载;
+   首次进入登录页才动态拉取,加载失败或慢网时自动回退 2D 字符雨。 */
+let _threePromise=null;
+function loadThree(){
+  if(typeof THREE!=='undefined')return Promise.resolve();
+  if(_threePromise)return _threePromise;
+  _threePromise=new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    s.src='vendor/three.min.js';
+    s.onload=resolve;
+    s.onerror=()=>{_threePromise=null;reject(new Error('three load failed'));};
+    document.head.appendChild(s);
+  });
+  return _threePromise;
+}
+</script>
 <script>
 /* ===== 代码海洋 2.0：Three.js 字符粒子海浪 =====
    视觉：发光代码字符(<,/,>,{,},0,1)粒子附着在起伏平面上，Matrix 绿/霓虹蓝，叠加 Bloom 感
@@ -987,6 +1004,10 @@ function startCodeSea(){
   if(!cv)return;
   const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   const alive=()=>cv.isConnected;   // 退出登录后 canvas 被移出 DOM，停帧避免空转 GPU
+  // Three.js 懒加载:加载完成才走 WebGL 路径,失败/慢网直接 2D 回退,登录不被视觉装饰阻塞
+  loadThree().catch(()=>{}).finally(()=>{ if(alive()) startCodeSeaImpl(cv, reduce, alive); });
+}
+function startCodeSeaImpl(cv, reduce, alive){
 
   /* ---------- 回退：原 2D 字符雨（Three.js 不可用时） ---------- */
   function fallback2D(){
@@ -1035,7 +1056,7 @@ function startCodeSea(){
     _seaStop=()=>{if(raf)cancelAnimationFrame(raf);raf=null;removeEventListener('resize',resize);};
   }
 
-  /* ---------- 主实现：Three.js 粒子海浪 ---------- */
+  /* ---------- 主实现：Three.js 粒子海浪（懒加载失败时此处必为 undefined，走 2D 回退） ---------- */
   if(typeof THREE==='undefined'){fallback2D();return;}
   try{
     const renderer=new THREE.WebGLRenderer({canvas:cv,alpha:true,antialias:false,powerPreference:'low-power'});
@@ -1972,7 +1993,9 @@ function renderAssignments(assignments,resumable=[]){
 }
 function renderQuizSession(data){
   const area=document.getElementById('quizArea');
-  LIVE_QUIZ=data;LIVE_QUESTIONS=data.questions||[];studentAns={...(data.saved_answers||{}),...(data.draft_answers||{})};
+  LIVE_QUIZ=data;LIVE_QUESTIONS=data.questions||[];
+  /* 已提交答案优先于草稿(后端已裁剪 draft 中的重叠键,这里顺序只为兜底旧缓存) */
+  studentAns={...(data.draft_answers||{}),...(data.saved_answers||{})};
   const max=LIVE_QUESTIONS.reduce((sum,item)=>sum+Number(item.score||0),0);
   const desc=document.getElementById('quizDesc');
   if(desc)desc.textContent=`「${data.title||'练习测验'}」 · ${LIVE_QUESTIONS.length} 题 · 满分 ${max} 分`;

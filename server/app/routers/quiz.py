@@ -333,12 +333,16 @@ def get_quiz(session_id: str, user: User = Depends(get_current_user), store: Sto
     session = store.quiz_sessions.get(session_id)
     if session is None or session.user_id != user.id:
         raise HTTPException(status_code=404, detail={"code": "quiz_not_found", "message": "测验不存在"})
+    # 答案权威版规则:已提交的答案永远优先,草稿只允许补充未提交的题目。
+    # 后端在此裁决,前端不得自行用 draft 覆盖 saved(否则恢复时旧草稿会盖掉最新提交)。
+    saved = dict(session.submitted_answers)
+    draft = {k: v for k, v in session.draft_answers.items() if k not in saved}
     return QuizSessionOut(
         id=session.id, status=session.status, course_id=session.course_id,
         bank_version=session.bank_version, title=session.title, assignment_id=session.assignment_id,
         questions=[_public(q) for q in session.questions],
-        saved_answers=session.submitted_answers,
-        draft_answers=session.draft_answers,
+        saved_answers=saved,
+        draft_answers=draft,
         draft_updated_at=session.draft_updated_at,
     )
 
@@ -403,6 +407,13 @@ async def submit(
         raise HTTPException(status_code=503, detail={"code": "submission_persist_failed", "message": "答案暂未可靠保存，请稍后重试"})
     try:
         result = await asyncio.to_thread(grade_session, session, payload.answers, store.settings)
+    except asyncio.CancelledError:
+        # 请求被取消(客户端断开/超时)时同样要把会话从 grading 恢复为 ongoing,
+        # 否则在进程重启的启动恢复之前,学生会话一直卡在"批改中"。
+        with store.lock:
+            session.status = "ongoing"
+            session.submitted_at = None
+        raise
     except Exception as error:
         with store.lock:
             session.status = "ongoing"
