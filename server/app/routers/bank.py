@@ -63,17 +63,27 @@ def knowledge_points(
             raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "课程不存在"})
         if not store.can_access_course(user, course_id, teaching=True):
             raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程知识点"})
+    accessible_course_ids = (
+        {course_id} if course_id is not None
+        else {course.id for course in store.courses_for_user(user)}
+    )
     points = {
         point.strip()
         for question in store.questions.values()
         if question.status == "published"
-        and (course_id is None or question.course_id == course_id)
+        and (
+            question.course_id is None
+            or user.role == "admin"
+            or question.course_id in accessible_course_ids
+        )
         for point in question.knowledge_points
         if point.strip()
     }
     points.update(
         node["name"] for node in store.graph_nodes.values()
-        if node.get("graph") == "knowledge" and node.get("name")
+        if node.get("graph") == "knowledge"
+        and node.get("name")
+        and (user.role == "admin" or node.get("created_by") == user.id)
     )
     return {"knowledge_points": sorted(points)}
 
@@ -103,7 +113,9 @@ def generate_questions(
     }
     available_points.update(
         node["name"] for node in store.graph_nodes.values()
-        if node.get("graph") == "knowledge" and node.get("name")
+        if node.get("graph") == "knowledge"
+        and node.get("name")
+        and (user.role == "admin" or node.get("created_by") == user.id)
     )
     invalid_points = [point for point in selected_points if point not in available_points]
     if invalid_points:
@@ -261,6 +273,8 @@ async def import_questions(
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if suffix not in {"csv", "xlsx"}:
         raise HTTPException(status_code=415, detail={"code": "unsupported_file", "message": "仅支持 CSV 或 XLSX"})
+    if course_id is not None and course_id not in store.courses:
+        raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "课程不存在"})
     if course_id is not None and not store.can_access_course(user, course_id, teaching=True):
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权向该课程题库导入题目"})
     content = await file.read(store.settings.max_document_bytes + 1)

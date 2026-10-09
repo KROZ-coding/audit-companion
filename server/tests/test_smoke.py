@@ -2148,6 +2148,65 @@ class SmokeTests(unittest.TestCase):
         self.assertNotIn("answer", body["questions"][0])
         self.assertEqual(body["questions"][0]["knowledge_points"], ["审计证据可靠性"])
 
+    def test_knowledge_points_and_ai_generation_are_teacher_scoped(self) -> None:
+        store = self.app.state.store
+        other = store.add_user("teacher02", "王老师", "teach234*", "teacher")
+        store.courses["other-course"] = Course("other-course", "其他课程", "2025-2026", other.id)
+
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/login", json={"username": "teacher01", "password": "teach123*"}
+            ).status_code,
+            200,
+        )
+        first_node = self.client.post(
+            "/api/graph/nodes",
+            json={"graph": "knowledge", "branch": "A", "name": "教师一私有知识点"},
+        ).json()
+        self.client.post("/api/auth/logout")
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/login", json={"username": "teacher02", "password": "teach234*"}
+            ).status_code,
+            200,
+        )
+        second_node = self.client.post(
+            "/api/graph/nodes",
+            json={"graph": "knowledge", "branch": "A", "name": "教师二私有知识点"},
+        ).json()
+
+        points = self.client.get("/api/bank/knowledge-points", params={"course_id": "other-course"})
+        self.assertEqual(points.status_code, 200)
+        self.assertIn(second_node["name"], points.json()["knowledge_points"])
+        self.assertNotIn(first_node["name"], points.json()["knowledge_points"])
+        self.assertEqual(
+            self.client.get("/api/bank/knowledge-points", params={"course_id": "audit-101"}).status_code,
+            403,
+        )
+
+        class ConfiguredLLM:
+            configured = True
+
+            def __init__(self, settings, channel=None):
+                pass
+
+            def complete_json(self, messages, temperature=0.2):
+                raise AssertionError("a foreign graph point must be rejected before generation")
+
+        with patch("app.routers.bank.LLMClient", ConfiguredLLM):
+            generated = self.client.post(
+                "/api/bank/generate",
+                json={
+                    "course_id": "other-course",
+                    "knowledge_points": [first_node["name"]],
+                    "question_type": "single_choice",
+                    "difficulty": "easy",
+                    "count": 1,
+                },
+            )
+        self.assertEqual(generated.status_code, 422)
+        self.assertEqual(generated.json()["code"], "invalid_knowledge_point")
+
     def test_local_knowledge_base_build_and_search(self) -> None:
         with TemporaryDirectory() as tmp:
             source = Path(tmp) / "kb"
