@@ -77,7 +77,7 @@
   HttpOnly/SameSite=Lax、退出即失效
 - 输入:Pydantic 严格 schema,10MB 载荷 0.3s 内 422;4000 层嵌套 JSON 不崩
 - 文件:上传按魔数/zip 结构校验,UUID 重命名落盘,zip-slip/炸弹全拒
-- 备份恢复:`store.json`+`files/` 白名单,多形态穿越全部 422
+- 备份恢复:`store.json`(可读 JSON 导出)+`files/` 白名单,多形态穿越全部 422
 - 注入:Excel 公式(=+-@ 前缀自动转义)、XSS(输出全转义)、路径注入不达敏感面
 - Web 层:同源写保护(跨站写/登录 CSRF 均 403)、安全响应头齐全、恶意 Host 不反射
 
@@ -90,21 +90,32 @@
    `limit_req zone=login`(30r/m)补上 IP 维度,示例已配。
 3. **TLS**:所有流量走 HTTPS(仓库示例含 80→443 跳转), COOKIE_SECURE 依赖它。
 4. **主机层**:ufw 只放 80/443;SSH 密钥登录禁密码;Fail2ban 兜底 SSH 爆破;
-   应用用非 root 用户跑(DATA_DIR 与 store.json 归属运行用户,权限 750)。
+   应用用非 root 用户跑(DATA_DIR 与 store.sqlite3 归属运行用户,权限 750)。
    `index.pkl` 被篡改等同于代码执行,务必锁目录权限。
-5. **备份**:`DATA_DIR/store.json` 是全部业务数据;`/api/admin/backup?format=archive`
-   可导出含资料文件的 ZIP,建议每日 cron 调用并存到独立介质。
+5. **备份**:业务数据在 `DATA_DIR/store.sqlite3`(SQLite 单文件);`/api/admin/backup?format=archive`
+   可导出含资料文件的 ZIP(store.json 部分为可读 JSON),建议每日 cron 调用并存到独立介质。
+   旧版 `store.json` 首次启动自动导入 SQLite 并改名 `store.json.migrated` 保留。
 
 ## 5. 架构上限(改部署方式前必须知道)
 
-1. **单进程 JSON 文件存储**:单机单实例稳定;**多进程/多实例前必须先迁移数据库**,
-   否则各进程内存状态互不感知,store.json 互相覆盖。
+1. **单进程存储(SQLite 单文件)**:单机单实例稳定;**多进程/多实例部署前仍必须做真正的
+   数据库化改造**,否则各进程内存状态互不感知,互相覆盖。落盘已优化为锁外序列化
+   (锁内只做引用快照),大数据量下不再阻塞业务请求。
 2. **批改在请求内同步完成**:60 人同时交主观题时,批改请求会占满批改通道并发槽
    (已独立成 grading 通道),不影响答疑;若再扩规模,批改应改为后台队列。
 3. **单机演示与校内课堂是设计目标**:面向公网互联网产品形态(多租户、水平扩展、
    对象存储)需要另行架构评审。
 
-## 6. 部署检查清单(按序执行)
+## 6. 已知语义(不是缺陷,运维需知情)
+
+1. **流式答疑(SSE)的会话记录落盘时机**:持久化中间件在响应内容生成前执行保存,
+   流式答疑产生的会话记录不随本次请求落盘,要等该用户的下一次写请求(或任意其他
+   写请求触发统一保存)才写入 store.sqlite3。进程崩溃时最近少量流式答疑记录可能丢失,
+   属已知取舍,无需报障。
+2. **登录会话跨重启保留**:会话令牌持久化在 store.sqlite3,重启后用户不必重新登录;
+   如需强制全体下线,由管理员清除会话。
+
+## 7. 部署检查清单(按序执行)
 
 ```
 [ ] 完整仓库结构上传(含前端页面,server 与页面同级)
@@ -122,11 +133,11 @@
 [ ] 备份 cron 上线
 ```
 
-## 7. 测试资产复用
+## 8. 测试资产复用
 
 | 工具 | 用途 |
 |---|---|
-| `server/tests/test_smoke.py` | 95 项功能与回归测试(`python -m unittest discover -s tests -p "test_smoke.py"`) |
+| `server/tests/test_smoke.py` | 106 项功能与回归测试(`python -m unittest discover -s tests -p "test_smoke.py"`) |
 | `server/security_test.py` | 41 项应用层攻击自查(仅对自有测试实例) |
 | `server/security_net_test.py` / `security_net_test2.py` | 16 项网络层攻击模拟(爆破/碰撞/走私/慢速/SSRF) |
 | `server/verify_llm_channels.py` | 模型通道真实验证与备用切换演练 |

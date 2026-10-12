@@ -744,11 +744,11 @@ html.dark .note{background:#22304f}
     <div style="display:flex;align-items:center;gap:8px;margin:14px 0 6px;flex-wrap:wrap">
       <b style="font-size:13.5px">📋 题目列表</b>
       <span style="flex:1"></span>
-      <input type="search" id="bankSearch" placeholder="搜索题干 / 知识点 / 来源" oninput="BANK_PAGE=1;renderBankTable()" style="max-width:260px;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
-      <select id="bankStatusFilter" onchange="BANK_FILTER=this.value;BANK_PAGE=1;renderBankTable()" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+      <input type="search" id="bankSearch" placeholder="搜索题干 / 知识点 / 来源" oninput="BANK_PAGE=1;bankSearchInput()" style="max-width:260px;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
+      <select id="bankStatusFilter" onchange="BANK_PAGE=1;loadQuestionBank(1)" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px">
         <option value="all">全部状态</option><option value="draft">草稿</option><option value="reviewing">待审</option><option value="published">已发布</option><option value="retired">已下架</option>
       </select>
-      <select id="bankKpFilter" onchange="BANK_PAGE=1;renderBankTable()" style="max-width:180px;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px"><option value="">全部知识点</option></select>
+      <select id="bankKpFilter" onchange="BANK_PAGE=1;loadQuestionBank(1)" style="max-width:180px;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font-size:12.5px"><option value="">全部知识点</option></select>
       <button class="btn sm ghost" onclick="quickPickForQuiz()" title="按当前筛选自动选一组已发布题(约 10 题,覆盖所选知识点)" style="min-height:32px">⚡ 智能选题</button>
       <button class="btn sm ghost" onclick="clearBankSelection()" title="清空已勾选题目" style="min-height:32px">清空选题</button>
     </div>
@@ -1809,6 +1809,7 @@ async function apiRequest(path,options={}){
   let data=null;
   try{data=text?JSON.parse(text):null;}catch(e){data={message:text};}
   if(!response.ok){const error=new Error(data?.message||`请求失败（${response.status}）`);error.status=response.status;throw error;}
+  if(options._withResponse){options._withResponse(response);}
   return data;
 }
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
@@ -1978,6 +1979,9 @@ async function ensureCourseId(){
   if(!courses.length)throw new Error('当前账号没有可用课程');
   LIVE_COURSE_ID=courses[0].id;
   return LIVE_COURSE_ID;
+}
+function ensureCourseIdSync(){
+  return LIVE_COURSE_ID||'';
 }
 function assignmentStatus(status){
   return status==='ongoing'?'待作答':status==='grading'?'批改中':status==='needs_review'?'待复核':status==='graded'?'已完成':status;
@@ -2268,32 +2272,60 @@ function renderQuestionTable(id,questions){
   const table=document.getElementById(id);if(!table)return;
   table.innerHTML=questions.length?questions.map(question=>`<tr data-id="${escapeHtml(question.id)}"><td>${escapeHtml(question.code)}</td><td>${escapeHtml((question.knowledge_points||[]).join('、')||question.stem)}</td><td>${escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`).join(''):'<tr><td colspan="5" style="color:var(--muted)">暂无题目</td></tr>';
 }
-async function loadQuestionBank(){
+let BANK_TOTAL=0,BANK_STATS={counts:{},knowledge_points:[]},BANK_FETCH_SEQ=0,BANK_SEARCH_TIMER=null;
+function bankQuery(extra={}){
+  const params=new URLSearchParams();
+  if(CURRENT.role==='teacher')params.set('course_id',ensureCourseIdSync());
+  const status=document.getElementById('bankStatusFilter')?.value||'all';
+  if(status&&status!=='all')params.set('status',status);
+  const kp=document.getElementById('bankKpFilter')?.value||'';
+  if(kp)params.set('knowledge_point',kp);
+  const query=(document.getElementById('bankSearch')?.value||'').trim();
+  if(query)params.set('search',query);
+  for(const[key,value]of Object.entries(extra))params.set(key,String(value));
+  const qs=params.toString();
+  return qs?`?${qs}`:'';
+}
+async function loadQuestionBank(page=BANK_PAGE){
+  const seq=++BANK_FETCH_SEQ;
   try{
-    const query=CURRENT.role==='teacher'?`?course_id=${encodeURIComponent(await ensureCourseId())}`:'';
-    const questions=await apiRequest('/api/bank'+query);
-    const counts={draft:0,reviewing:0,published:0,retired:0};questions.forEach(item=>{counts[item.status]=(counts[item.status]||0)+1;});
-    const summary=document.getElementById('questionSummary');if(summary)summary.textContent=`共 ${questions.length} 题 · 草稿 ${counts.draft} · 待审 ${counts.reviewing} · 已发布 ${counts.published} · 已下架 ${counts.retired}`;
+    const questions=await apiRequest('/api/bank'+bankQuery({page,page_size:BANK_PAGE_SIZE}),{_withResponse:response=>{
+      BANK_TOTAL=Number(response.headers.get('X-Total-Count')||questions.length)||0;
+    }});
+    if(seq!==BANK_FETCH_SEQ)return;
+    BANK_PAGE=page;
+    try{
+      const stats=await apiRequest('/api/bank/stats'+bankQuery());
+      if(seq===BANK_FETCH_SEQ)BANK_STATS=stats;
+    }catch(e){/* 摘要失败不影响列表 */}
+    if(seq!==BANK_FETCH_SEQ)return;
+    const counts=BANK_STATS.counts||{};
+    const summary=document.getElementById('questionSummary');if(summary)summary.textContent=`共 ${BANK_STATS.total??questions.length} 题 · 草稿 ${counts.draft||0} · 待审 ${counts.reviewing||0} · 已发布 ${counts.published||0} · 已下架 ${counts.retired||0}`;
     BANK_QUESTIONS=questions;
-    const kpSet=new Set();questions.forEach(q=>(q.knowledge_points||[]).forEach(p=>kpSet.add(p)));
     const kpSel=document.getElementById('bankKpFilter');
-    if(kpSel){const cur=kpSel.value;kpSel.innerHTML='<option value="">全部知识点</option>'+[...kpSet].sort().map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');kpSel.value=cur;}
+    if(kpSel){const cur=kpSel.value;kpSel.innerHTML='<option value="">全部知识点</option>'+(BANK_STATS.knowledge_points||[]).map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');kpSel.value=cur;}
     renderQuestionTable('qBankTable',questions);
     renderBankTable();
   }catch(error){showApiError('qBankTable',error.message);showApiError('reviewTable',error.message);}
 }
-let BANK_QUESTIONS=[],BANK_FILTER='all',BANK_PAGE=1,BANK_SELECTED=new Set();
-function renderBankTable(){
+function bankSearchInput(){
+  const input=document.getElementById('bankSearch');
+  if(BANK_SEARCH_TIMER)clearTimeout(BANK_SEARCH_TIMER);
+  BANK_SEARCH_TIMER=setTimeout(()=>{BANK_SEARCH_TIMER=null;BANK_PAGE=1;loadQuestionBank(1);},250);
+}
+let BANK_QUESTIONS=[],BANK_PAGE=1,BANK_PAGE_SIZE=20,BANK_SELECTED=new Set();
+async function renderBankTable(){
   const table=document.getElementById('reviewTable');if(!table)return;
-  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
-  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
-  const rows=BANK_QUESTIONS.filter(q=>{
-    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''} ${q.code||''}`.toLowerCase();
-    return(BANK_FILTER==='all'||q.status===BANK_FILTER)&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
+  const pages=Math.max(1,Math.ceil(BANK_TOTAL/BANK_PAGE_SIZE));
+  BANK_PAGE=Math.min(BANK_PAGE,pages)||1;
+  const questions=await apiRequest('/api/bank'+bankQuery({page:BANK_PAGE,page_size:BANK_PAGE_SIZE}),{_withResponse:response=>{
+    BANK_TOTAL=Number(response.headers.get('X-Total-Count')||0);
+  }}).catch(error=>{
+    showApiError('reviewTable',error.message);return null;
   });
-  const pageSize=20,pages=Math.max(1,Math.ceil(rows.length/pageSize));BANK_PAGE=Math.min(BANK_PAGE,pages);
-  const pageRows=rows.slice((BANK_PAGE-1)*pageSize,BANK_PAGE*pageSize);
-  table.innerHTML=pageRows.length?pageRows.map(question=>{
+  if(questions===null)return;
+  BANK_QUESTIONS=questions;
+  table.innerHTML=questions.length?questions.map(question=>{
     const stem=question.stem||'';
     const stemShort=stem.length>42?stem.slice(0,42)+'…':stem;
     const kp=(question.knowledge_points||[]).join('、');
@@ -2304,27 +2336,21 @@ function renderBankTable(){
     return `<tr data-id="${escapeHtml(question.id)}"><td>${checkbox}</td><td>${escapeHtml(question.code)}</td><td><div title="${escapeHtml(stem)}" style="cursor:help">${escapeHtml(stemShort)}</div><small style="color:var(--muted)" title="${escapeHtml(kp)} · ${escapeHtml(source)}">${escapeHtml(kp.length>18?kp.slice(0,18)+'…':kp)||'未标注'} · ${escapeHtml(sourceShort)}</small></td><td>${diffMap[question.difficulty]||escapeHtml(question.difficulty)}</td><td>${statusPill(question.status)}</td><td>${questionActions(question)}</td></tr>`;
   }).join(''):'<tr><td colspan="6" style="color:var(--muted)">没有匹配的题目</td></tr>';
   const pager=document.getElementById('bankPager');
-  if(pager)pager.innerHTML=`<button class="btn sm ghost" ${BANK_PAGE<=1?'disabled':''} onclick="BANK_PAGE--;renderBankTable()">上一页</button><span style="font-size:12px;color:var(--muted)">第 ${BANK_PAGE} / ${pages} 页 · 匹配 ${rows.length} 题</span><button class="btn sm ghost" ${BANK_PAGE>=pages?'disabled':''} onclick="BANK_PAGE++;renderBankTable()">下一页</button>`;
+  if(pager)pager.innerHTML=`<button class="btn sm ghost" ${BANK_PAGE<=1?'disabled':''} onclick="BANK_PAGE--;loadQuestionBank()">上一页</button><span style="font-size:12px;color:var(--muted)">第 ${BANK_PAGE} / ${pages} 页 · 匹配 ${BANK_TOTAL} 题</span><button class="btn sm ghost" ${BANK_PAGE>=pages?'disabled':''} onclick="BANK_PAGE++;loadQuestionBank()">下一页</button>`;
   updateQuizBar();
 }
 function toggleQuizSelect(id,checked){checked?BANK_SELECTED.add(id):BANK_SELECTED.delete(id);updateQuizBar();}
 function toggleSelectAll(input){
-  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
-  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
-  BANK_QUESTIONS.filter(q=>{
-    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''}`.toLowerCase();
-    return q.status==='published'&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
-  }).forEach(q=>{input.checked?BANK_SELECTED.add(q.id):BANK_SELECTED.delete(q.id);});
+  BANK_QUESTIONS.filter(q=>q.status==='published').forEach(q=>{input.checked?BANK_SELECTED.add(q.id):BANK_SELECTED.delete(q.id);});
   renderBankTable();
 }
 function clearBankSelection(){BANK_SELECTED.clear();renderBankTable();}
-function quickPickForQuiz(){
-  const query=(document.getElementById('bankSearch')?.value||'').trim().toLowerCase();
-  const kpFilter=document.getElementById('bankKpFilter')?.value||'';
-  const pool=BANK_QUESTIONS.filter(q=>{
-    const haystack=`${q.stem||''} ${(q.knowledge_points||[]).join(' ')} ${q.source||''} ${q.code||''}`.toLowerCase();
-    return q.status==='published'&&(!kpFilter||(q.knowledge_points||[]).includes(kpFilter))&&(!query||haystack.includes(query));
-  });
+async function quickPickForQuiz(){
+  let pool=[];
+  try{
+    pool=await apiRequest('/api/bank'+bankQuery({page:1,page_size:500}));
+  }catch(error){alert(error.message||'题目加载失败');return;}
+  pool=pool.filter(q=>q.status==='published');
   if(!pool.length){alert('当前筛选下没有已发布的题目');return;}
   // 按题型分组均匀抽,单选优先,目标 10 题
   const byType={};
@@ -2343,7 +2369,7 @@ function quickPickForQuiz(){
     if(!added)break;
     round++;
   }
-  BANK_PAGE=1;renderBankTable();
+  BANK_PAGE=1;loadQuestionBank(1);
   alert(`已智能选题 ${BANK_SELECTED.size} 道(按题型均匀覆盖当前筛选)。可在底部组卷栏调整后分发。`);
 }
 function updateQuizBar(){

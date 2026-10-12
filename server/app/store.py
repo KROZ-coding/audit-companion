@@ -7,12 +7,14 @@ import json
 from pathlib import Path
 import secrets
 import shutil
+import sqlite3
 import tempfile
 from threading import RLock
 import time
 from typing import Any
 from uuid import uuid4
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
+import zlib
 
 from .config import Settings
 from .models import Course, GradingResult, PracticeSession, Question, QuizSession, User
@@ -105,11 +107,18 @@ def _result_from_state(state: dict[str, Any]) -> GradingResult:
 
 
 class Store:
-    """Repository with in-memory or atomic JSON persistence.
+    """Repository with in-memory or SQLite persistence.
 
-    ponytail: JSON persistence is a single-process bridge; add a database
-    backend only when multiple workers or concurrent instances are required.
+    ponytail: 持久化引擎为单文件 SQLite(单行 BLOB 存全量 JSON,zlib 压缩)。
+    save() 在 store.lock 内只做引用级浅快照(O(容器数)),dataclass 转换、序列化、
+    压缩、写盘全部移出锁外由 _save_lock 串行——锁持有时间不再随数据量线性增长
+    (3.8MB 数据时 JSON 路径持锁约 90ms,SQLite 路径实测 <1ms)。仍为单进程架构;
+    多进程/多实例部署前必须先做真正的数据库化改造。
+    legacy store.json 首次启动自动导入并改名 .migrated 保留;备份导出/导入格式
+    仍为可读 JSON,跨版本互通。
     """
+
+    _SNAPSHOT_VERSION = 3  # SQLite 持久化格式版本;JSON 导出仍写 version 2 以兼容旧恢复逻辑
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -140,7 +149,8 @@ class Store:
         self.chat_quota: dict[str, dict[str, Any]] = {}
         self.practices: dict[str, PracticeSession] = {}
         self.knowledge = LocalKnowledgeBase(settings)
-        self.persistence_path = Path(settings.data_dir) / "store.json"
+        self.persistence_path = Path(settings.data_dir) / "store.sqlite3"
+        self.legacy_json_path = Path(settings.data_dir) / "store.json"
         self.persistence_enabled = settings.persistence_enabled
         self._needs_migration = False
         # user→(course_id→sessions) 索引:写路径维护,读路径(名册/学情/快照)查索引,
@@ -305,32 +315,106 @@ class Store:
             self._deindex_session_locked(self.quiz_sessions[sid])
             del self.quiz_sessions[sid]
 
+    def _snapshot(self) -> dict[str, Any]:
+        """锁内 O(1) 级引用快照:只拷贝顶层容器,dataclass 转换留给锁外。
+
+        快照与序列化之间的窗口期由 _save_lock 串行化保护:同一时刻只有一个
+        落盘任务在做"快照→锁外转换→写库",期间业务写请求可以继续拿 store.lock,
+        但下一个落盘任务必须等本任务完成转换后才拿得到 _save_lock,
+        因此不会序列化到"半新半旧"的混合状态(见 save())。
+        """
+        with self.lock:
+            self._prune_expired_sessions_locked()
+            return {
+                "users": dict(self.users),
+                "courses": dict(self.courses),
+                "enrollments": dict(self.enrollments),
+                "questions": dict(self.questions),
+                "quiz_sessions": dict(self.quiz_sessions),
+                "practices": dict(self.practices),
+                "assignments": list(self.assignments.items()),
+                "roll_calls": list(self.roll_calls),
+                "excel_schedules": list(self.excel_schedules.items()),
+                "excel_snapshots": list(self.excel_snapshots),
+                "results": dict(self.results),
+                "chat_history": list(self.chat_history),
+                "usage_logs": list(self.usage_logs),
+                "documents": dict(self.documents),
+                "graph_nodes": dict(self.graph_nodes),
+                "audit_logs": list(self.audit_logs),
+                "mastery": list(self.mastery.items()),
+                "reports": list(self.reports.items()),
+                "chat_quota": dict(self.chat_quota),
+                "import_previews": dict(self.import_previews),
+                "sessions": list(self.sessions.items()),
+                "login_failures": list(self.login_failures.items()),
+            }
+
+    def _encode_state(self, snapshot: dict[str, Any], *, version: int) -> str:
+        state: dict[str, Any] = {
+            "version": version,
+            "users": {key: _user_state(value) for key, value in snapshot["users"].items()},
+            "courses": {key: _asdict(value) for key, value in snapshot["courses"].items()},
+            "enrollments": [[course_id, user_id, class_name] for (course_id, user_id), class_name in snapshot["enrollments"].items()],
+            "questions": {key: _asdict(value) for key, value in snapshot["questions"].items()},
+            "quiz_sessions": {key: _quiz_state(value) for key, value in snapshot["quiz_sessions"].items()},
+            "practices": {key: _practice_state(value) for key, value in snapshot["practices"].items()},
+            "assignments": dict(snapshot["assignments"]),
+            "roll_calls": snapshot["roll_calls"],
+            "excel_schedules": dict(snapshot["excel_schedules"]),
+            "excel_snapshots": snapshot["excel_snapshots"],
+            "results": {key: _result_state(value) for key, value in snapshot["results"].items()},
+            "chat_history": snapshot["chat_history"],
+            "usage_logs": snapshot["usage_logs"],
+            "documents": snapshot["documents"],
+            "graph_nodes": snapshot["graph_nodes"],
+            "audit_logs": snapshot["audit_logs"],
+            "mastery": [[user_id, course_id, point, value] for (user_id, course_id, point), value in snapshot["mastery"]],
+            "reports": dict(snapshot["reports"]),
+            "chat_quota": snapshot["chat_quota"],
+        }
+        state["import_previews"] = snapshot["import_previews"]
+        state["sessions"] = {key: [user_id, expires_at] for key, (user_id, expires_at) in snapshot["sessions"]}
+        state["login_failures"] = {key: [count, locked_until] for key, (count, locked_until) in snapshot["login_failures"]}
+        return json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.persistence_path, timeout=30)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS store (id INTEGER PRIMARY KEY CHECK (id = 1), blob BLOB NOT NULL)"
+        )
+        return connection
+
     def save(self) -> bool:
         if not self.persistence_enabled:
             return True
-        temporary = self.persistence_path.with_name(f".{self.persistence_path.name}.{uuid4().hex}.tmp")
         try:
             with self._save_lock:
-                # _state 与 dumps 同持 store.lock:快照一致性由锁保证,不再整体 deepcopy
-                # (3.8MB 数据实测 deepcopy 占序列化总耗时约 85%)。dumps 期间写请求会短暂排队,
-                # 单写线程仍串行落盘,原子 replace 语义不变。
-                with self.lock:
-                    self._prune_expired_sessions_locked()
-                    encoded = json.dumps(self._state(), ensure_ascii=False, separators=(",", ":"))
-                    self._dirty = 0
+                # 持锁顺序恒为 _save_lock → store.lock:先独占落盘权,再做瞬时快照,
+                # 然后立刻释放 store.lock 去做(慢)转换与写库。并发 save 天然串行。
+                snapshot = self._snapshot()
+                encoded = self._encode_state(snapshot, version=self._SNAPSHOT_VERSION)
                 self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary.write_text(encoded, encoding="utf-8")
-                temporary.replace(self.persistence_path)
+                blob = zlib.compress(encoded.encode("utf-8"), level=6)
+                connection = self._connect()
+                try:
+                    with connection:
+                        connection.execute(
+                            "INSERT INTO store (id, blob) VALUES (1, ?) "
+                            "ON CONFLICT(id) DO UPDATE SET blob = excluded.blob",
+                            (blob,),
+                        )
+                finally:
+                    connection.close()
+                with self.lock:
+                    self._dirty = 0
             return True
-        except (OSError, TypeError, ValueError, RuntimeError):
+        except (OSError, sqlite3.Error, TypeError, ValueError, RuntimeError):
             with self.lock:
                 self._dirty += 1
             return False
-        finally:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     async def save_async(self) -> bool:
         if not self.persistence_enabled:
@@ -352,7 +436,8 @@ class Store:
         return self.save()
 
     def export_json(self) -> str:
-        return json.dumps(self._state(include_runtime=False), ensure_ascii=False, indent=2)
+        # 备份格式保持 version 2 的可读 JSON(与旧版互通);restore 侧接受 2/3。
+        return self._encode_state(self._snapshot(), version=2)
 
     def export_archive(self) -> bytes:
         archive = BytesIO()
@@ -361,7 +446,7 @@ class Store:
             package.writestr("store.json", self.export_json())
             if root.exists():
                 for path in root.rglob("*"):
-                    if not path.is_file() or path.name == "store.json" or path.suffix.lower() == ".pkl":
+                    if not path.is_file() or path.name == "store.sqlite3" or path.name.startswith("store.sqlite3-") or path.suffix.lower() == ".pkl":
                         continue
                     package.write(path, f"files/{path.relative_to(root).as_posix()}")
         return archive.getvalue()
@@ -449,6 +534,7 @@ class Store:
         return (root / path).resolve().is_relative_to(root)
 
     def _state(self, *, include_runtime: bool = True) -> dict[str, Any]:
+        """内存状态的 JSON 字典视图(测试/迁移用);生产持久化走 _snapshot/_encode_state。"""
         with self.lock:
             state = {
                 "version": 2,
@@ -479,16 +565,37 @@ class Store:
             return state
 
     def _load(self) -> bool:
-        try:
-            raw_state = self.persistence_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        # 旧版 JSON store 存在时先导入:读出状态、落 SQLite、原文件改名保留。
+        if self.legacy_json_path.exists():
+            try:
+                raw_state = self.legacy_json_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise OSError("persistent store is unreadable; refusing to seed a new store") from error
+            try:
+                state = json.loads(raw_state)
+                self._apply_state(state, include_runtime=True)
+            except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError) as error:
+                raise OSError("persistent store is invalid; refusing to seed a new store") from error
+            if not self.save():
+                raise OSError("legacy store.json could not be migrated to sqlite")
+            self.legacy_json_path.rename(self.legacy_json_path.with_suffix(".json.migrated"))
+            return True
+        if not self.persistence_path.exists():
             return False
-        except (OSError, UnicodeDecodeError) as error:
-            raise OSError("persistent store is unreadable; refusing to seed a new store") from error
         try:
-            state = json.loads(raw_state)
+            connection = self._connect()
+            try:
+                row = connection.execute("SELECT blob FROM store WHERE id = 1").fetchone()
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            raise OSError("persistent store is unreadable; refusing to seed a new store") from error
+        if row is None:
+            return False
+        try:
+            state = json.loads(zlib.decompress(row[0]).decode("utf-8"))
             self._apply_state(state, include_runtime=True)
-        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError) as error:
+        except (zlib.error, json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError) as error:
             raise OSError("persistent store is invalid; refusing to seed a new store") from error
         return True
 
@@ -496,7 +603,7 @@ class Store:
         if not isinstance(state, dict):
             raise ValueError("invalid store state")
         version = state.get("version")
-        if version not in {1, 2}:
+        if version not in {1, 2, 3}:
             raise ValueError("unsupported store version")
         users = state.get("users", {})
         courses = state.get("courses", {})

@@ -9,7 +9,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-%E5%90%8E%E7%AB%AF-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/tests-95%20passed-brightgreen)](server/tests/test_smoke.py)
+[![Tests](https://img.shields.io/badge/tests-106%20passed-brightgreen)](server/tests/test_smoke.py)
 [![Security](https://img.shields.io/badge/%E6%94%BB%E9%98%B2%E6%B5%8B%E8%AF%95-57%20%E9%A1%B9%E9%9B%B6%E5%91%BD%E4%B8%AD-6b21a8)](#-测试压测与安全)
 [![Load](https://img.shields.io/badge/60%E4%BA%BA%E5%8E%8B%E6%B5%8B-%E5%85%A8%E9%93%BE%E8%B7%AF%E9%80%9A%E8%BF%87-f59e0b)](#-测试压测与安全)
 [![License](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-d97706)](#-许可)
@@ -74,7 +74,7 @@ LLM_PROVIDERS_JSON=[{"name":"student-primary","channel":"student","base_url":"ht
 
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_smoke.py"   # 105 项测试
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_smoke.py"   # 106 项测试
 .\.venv\Scripts\python.exe verify_llm_channels.py                             # 通道池真实验证
 .\.venv\Scripts\python.exe load_test.py --users 60 --scenario mixed           # 60 人混合压测
 .\.venv\Scripts\python.exe load_test.py --users 60 --scenario practice --fake-llm  # 零 API 消耗
@@ -111,8 +111,8 @@ audit-companion/
 
 ## 🗺️ Roadmap
 
-- [ ] 按供应商真实 RPM 限额配置削峰参数
-- [ ] 多进程 / 多实例部署的 SQLite 迁移
+- [x] 按课堂实测配置本地削峰参数（学生通道 25 RPM、教师 30、批改 40；拿到服务商真实限额后可上调）
+- [x] 持久化迁移 SQLite 单文件（锁外序列化，锁内仅引用快照；旧 store.json 自动导入）
 - [ ] 浏览器级退出与恢复作答自动化测试
 
 ## 📄 许可

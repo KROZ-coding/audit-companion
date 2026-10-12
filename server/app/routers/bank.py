@@ -7,7 +7,8 @@ from zipfile import BadZipFile, ZipFile
 from xml.etree import ElementTree as ET
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from pydantic import ValidationError
 from pydantic import ValidationError
 
 from ..deps import get_store, require_roles
@@ -23,13 +24,48 @@ from .helpers import question_out
 router = APIRouter(prefix="/api/bank", tags=["bank"])
 
 
-@router.get("", response_model=list[QuestionOut])
+def _visible_questions(
+    user: User,
+    store: Store,
+    *,
+    question_status: str | None,
+    course_id: str | None,
+    question_type: str | None,
+    difficulty: str | None,
+    chapter: str | None,
+    search: str | None,
+    knowledge_point: str | None,
+) -> list[Question]:
+    rows = [
+        q for q in store.questions.values()
+        if (question_status is None or q.status == question_status)
+        and (course_id is None or q.course_id == course_id)
+        and (question_type is None or q.type == question_type)
+        and (difficulty is None or q.difficulty == difficulty)
+        and (chapter is None or q.chapter == chapter)
+        and (user.role == "admin" or q.course_id is None or store.can_access_course(user, q.course_id, teaching=True))
+    ]
+    if knowledge_point:
+        rows = [q for q in rows if knowledge_point in q.knowledge_points]
+    if search:
+        needle = search.lower()
+        rows = [
+            q for q in rows
+            if needle in f"{q.stem} {' '.join(q.knowledge_points)} {q.source} {q.code}".lower()
+        ]
+    return rows
+
+
+@router.get("")
 def list_questions(
+    response: Response,
     question_status: Literal["draft", "reviewing", "published", "retired", "rejected"] | None = Query(default=None, alias="status"),
     course_id: str | None = None,
     question_type: Literal["single_choice", "multi_choice", "judge", "fill", "short_answer", "case"] | None = Query(default=None, alias="type"),
     difficulty: Literal["easy", "medium", "hard"] | None = None,
     chapter: str | None = None,
+    search: str | None = Query(default=None, max_length=200),
+    knowledge_point: str | None = None,
     page: int | None = Query(default=None, ge=1),
     page_size: int = Query(default=200, ge=1, le=500),
     user: User = Depends(require_roles("teacher", "admin")),
@@ -38,18 +74,38 @@ def list_questions(
     if user.role == "teacher" and course_id is not None and not store.can_access_course(user, course_id, teaching=True):
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程题库"})
     rows = [
-        question_out(q) for q in store.questions.values()
-        if (question_status is None or q.status == question_status)
-        and (course_id is None or q.course_id == course_id)
-        and (question_type is None or q.type == question_type)
-        and (difficulty is None or q.difficulty == difficulty)
-        and (chapter is None or q.chapter == chapter)
-        and (user.role == "admin" or q.course_id is None or store.can_access_course(user, q.course_id, teaching=True))
+        question_out(q) for q in _visible_questions(
+            user, store,
+            question_status=question_status, course_id=course_id, question_type=question_type,
+            difficulty=difficulty, chapter=chapter, search=search, knowledge_point=knowledge_point,
+        )
     ]
+    response.headers["X-Total-Count"] = str(len(rows))
     if page is None:
-        return rows  # 兼容现有前端全量拉取;题库过千后前端应切换到 page/page_size
+        return rows  # 兼容旧调用方全量拉取;演示页题库已切服务端分页
     start = (page - 1) * page_size
     return rows[start:start + page_size]
+
+
+@router.get("/stats")
+def bank_stats(
+    course_id: str | None = None,
+    user: User = Depends(require_roles("teacher", "admin")),
+    store: Store = Depends(get_store),
+) -> dict:
+    if user.role == "teacher" and course_id is not None and not store.can_access_course(user, course_id, teaching=True):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程题库"})
+    rows = _visible_questions(
+        user, store,
+        question_status=None, course_id=course_id, question_type=None,
+        difficulty=None, chapter=None, search=None, knowledge_point=None,
+    )
+    counts: dict[str, int] = {}
+    points: set[str] = set()
+    for question in rows:
+        counts[question.status] = counts.get(question.status, 0) + 1
+        points.update(point for point in question.knowledge_points if point.strip())
+    return {"total": len(rows), "counts": counts, "knowledge_points": sorted(points)}
 
 
 @router.get("/knowledge-points")

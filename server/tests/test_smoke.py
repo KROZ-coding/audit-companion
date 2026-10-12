@@ -32,6 +32,19 @@ from app.services.maxkb_client import MaxKBClient  # noqa: E402
 from app.store import Store  # noqa: E402
 
 
+def second_store_state(data_dir) -> str:
+    """读取 SQLite 持久化层的 JSON 快照(供测试断言落盘内容)。"""
+    import sqlite3 as _sqlite3
+    import zlib as _zlib
+    connection = _sqlite3.connect(str(Path(data_dir, "store.sqlite3")))
+    try:
+        blob = connection.execute("SELECT blob FROM store WHERE id = 1").fetchone()[0]
+    finally:
+        connection.close()
+    return _zlib.decompress(blob).decode("utf-8")
+
+
+
 class SmokeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.app = create_app()
@@ -250,7 +263,7 @@ class SmokeTests(unittest.TestCase):
                     answers = {question_id: 1}
 
                     def inspect_saved_submission(session, submitted, current_settings):
-                        persisted = json.loads(store.persistence_path.read_text(encoding="utf-8"))
+                        persisted = json.loads(second_store_state(current_settings.data_dir))
                         saved = persisted["quiz_sessions"][session.id]
                         self.assertEqual(saved["status"], "grading")
                         self.assertEqual(saved["submitted_answers"], answers)
@@ -752,7 +765,7 @@ class SmokeTests(unittest.TestCase):
             first.assignments["batch-1"] = {"id": "batch-1", "course_id": "audit-101", "session_ids": [session.id]}
             first.roll_calls.append({"course_id": "audit-101", "student_id": student.id, "correct": True})
             first.save()
-            self.assertTrue(Path(data_dir, "store.json").exists())
+            self.assertTrue(Path(data_dir, "store.sqlite3").exists())
             second = Store(settings)
             self.assertEqual(second.courses["audit-101"].name, "审计学（已保存）")
             self.assertEqual(len(second.questions), 3)
@@ -780,7 +793,7 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(resumed.status, "ongoing")
             self.assertIsNone(resumed.submitted_at)
             self.assertEqual(resumed.submitted_answers, {"q1": "提交后进程中断"})
-            persisted = json.loads(Path(data_dir, "store.json").read_text(encoding="utf-8"))
+            persisted = json.loads(second_store_state(data_dir))
             self.assertEqual(persisted["quiz_sessions"][session.id]["status"], "ongoing")
 
     def test_llm_provider_config_resolves_key_env_without_repr_leak(self) -> None:
@@ -816,6 +829,7 @@ class SmokeTests(unittest.TestCase):
                 "{broken",
                 json.dumps({"version": 2, "users": {}, "courses": {}, "questions": {}, "quiz_sessions": None}),
             ):
+                # 旧版 store.json 损坏:拒绝启动且不覆盖原文件(升级导入路径同样受保护)
                 with self.subTest(raw_state=raw_state):
                     store_path.write_text(raw_state, encoding="utf-8")
                     with self.assertRaisesRegex(OSError, "refusing to seed"):
@@ -844,9 +858,9 @@ class SmokeTests(unittest.TestCase):
             with patch("app.main.settings", settings):
                 with TestClient(create_app()) as client:
                     self.assertEqual(client.get("/health").status_code, 200)
-                    self.assertFalse(Path(data_dir, "store.json").exists())
+                    self.assertFalse(Path(data_dir, "store.sqlite3").exists())
                     self.assertEqual(client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"}).status_code, 200)
-                    self.assertTrue(Path(data_dir, "store.json").exists())
+                    self.assertTrue(Path(data_dir, "store.sqlite3").exists())
 
     def test_legacy_store_migration_rebuilds_mastery_and_removes_demo_scores(self) -> None:
         with TemporaryDirectory() as data_dir:
@@ -865,6 +879,7 @@ class SmokeTests(unittest.TestCase):
             first.audit("quiz_demo_random", "teacher", {"session_id": demo.id})
             state = first._state()
             state["version"] = 1
+            # 模拟升级前布局:只有旧版 store.json,SQLite 尚未生成
             Path(data_dir, "store.json").write_text(json.dumps(state), encoding="utf-8")
 
             migrated = Store(settings)
@@ -873,7 +888,12 @@ class SmokeTests(unittest.TestCase):
             self.assertNotIn(demo.id, migrated.quiz_sessions)
             self.assertNotIn("demo-result", migrated.results)
             self.assertFalse(migrated.reports)
-            self.assertEqual(json.loads(Path(data_dir, "store.json").read_text(encoding="utf-8"))["version"], 2)
+            # 旧 JSON 已导入 SQLite 并改名原样保留(version 1 不改写),后续启动走 SQLite
+            self.assertEqual(json.loads(Path(data_dir, "store.json.migrated").read_text(encoding="utf-8"))["version"], 1)
+            self.assertFalse(Path(data_dir, "store.json").exists())
+            self.assertTrue(Path(data_dir, "store.sqlite3").exists())
+            reloaded = Store(settings)
+            self.assertEqual(reloaded.mastery[(student.id, "audit-101", "审计证据")]["mastery"], 100)
 
     def test_admin_delete_user_cleans_related_state(self) -> None:
         self.assertEqual(
@@ -2886,3 +2906,72 @@ class SmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BankPaginationTests(unittest.TestCase):
+    """题库服务端分页回归:筛选/搜索/分页/stats 全部走后端,前端只渲染当前页。"""
+
+    def setUp(self) -> None:
+        self.app = create_app()
+        self.client = TestClient(self.app)
+        self.store = self.app.state.store
+        self.assertEqual(
+            self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"}).status_code,
+            200,
+        )
+
+    def _create_question(self, stem: str, *, knowledge_points=None, status: str = "published") -> str:
+        payload = {
+            "type": "single_choice", "stem": stem, "options": ["A", "B"], "answer": 0,
+            "reference_answer": "A", "knowledge_points": knowledge_points or [],
+            "difficulty": "easy", "course_id": "audit-101",
+        }
+        response = self.client.post("/api/bank", json=payload)
+        self.assertEqual(response.status_code, 201)
+        question_id = response.json()["id"]
+        if status != "draft":
+            self.client.post(f"/api/bank/{question_id}/submit")
+            if status == "published":
+                self.client.post(f"/api/bank/{question_id}/review", json={"decision": "pass"})
+        return question_id
+
+    def test_list_pagination_and_total_header(self) -> None:
+        for index in range(25):
+            self._create_question(f"分页回归题 {index:02d}")
+        response = self.client.get("/api/bank", params={"course_id": "audit-101", "page": 2, "page_size": 20})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["x-total-count"], "28")  # 种子 3 题 + 新建 25 题
+        self.assertEqual(len(response.json()), 8)
+        page1 = self.client.get("/api/bank", params={"course_id": "audit-101", "page": 1, "page_size": 20})
+        self.assertEqual(len(page1.json()), 20)
+        self.assertEqual(page1.headers["x-total-count"], "28")
+        no_page = self.client.get("/api/bank", params={"course_id": "audit-101"})
+        self.assertEqual(len(no_page.json()), 28)  # 不传 page 保持全量兼容
+
+    def test_search_and_knowledge_point_filters(self) -> None:
+        target = self._create_question("函证程序的特殊考虑", knowledge_points=["函证与证据"])
+        self._create_question("无关题目甲乙丙", knowledge_points=["其他"])
+        searched = self.client.get("/api/bank", params={"course_id": "audit-101", "search": "函证"})
+        self.assertIn(target, [item["id"] for item in searched.json()])
+        self.assertEqual(searched.headers["x-total-count"], "1")
+        by_point = self.client.get(
+            "/api/bank", params={"course_id": "audit-101", "knowledge_point": "函证与证据"}
+        )
+        self.assertIn(target, [item["id"] for item in by_point.json()])
+        self.assertEqual(by_point.headers["x-total-count"], "1")
+
+    def test_stats_endpoint_matches_listing(self) -> None:
+        self._create_question("统计回归题一", knowledge_points=["统计回归点"])
+        self._create_question("统计回归题二", status="draft")
+        stats = self.client.get("/api/bank/stats", params={"course_id": "audit-101"})
+        self.assertEqual(stats.status_code, 200)
+        body = stats.json()
+        listed = self.client.get("/api/bank", params={"course_id": "audit-101"})
+        self.assertEqual(body["total"], len(listed.json()))
+        self.assertEqual(sum(body["counts"].values()), body["total"])
+        self.assertIn("统计回归点", body["knowledge_points"])
+
+    def test_student_cannot_access_stats(self) -> None:
+        self.client.post("/api/auth/logout")
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"})
+        self.assertEqual(self.client.get("/api/bank/stats").status_code, 403)
