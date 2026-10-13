@@ -37,7 +37,7 @@ def _frontend_route(file_name: str):
 def create_app() -> FastAPI:
     production = settings.app_env.lower() == "production"
     application = FastAPI(
-        title=settings.app_name, version="0.1.0", description="经管数智审计业务后端",
+        title=settings.app_name, version="1.0.0", description="经管数智审计业务后端",
         docs_url=None if production else "/docs",
         redoc_url=None if production else "/redoc",
         openapi_url=None if production else "/openapi.json",
