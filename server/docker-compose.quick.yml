@@ -1,0 +1,60 @@
+# 快速启动编排:Docker 化跑正式服务(应用 + 可选隧道辅助容器)。
+# 与 docker-compose.sim.yml 互不干扰:不同项目名、不同端口、不同数据卷。
+# 用法见 docs/Docker快速启动.md;一键脚本:仓库根 启动Docker服务.bat。
+#
+# 设计要点:
+# - 复用 Dockerfile.sim 极简镜像(python:3.12-slim + requirements),代码运行时挂载,
+#   .env 随仓库根只读挂载进容器,Key 永不进镜像;
+# - 数据用命名卷而非宿主机目录:SQLite WAL 在 Windows 绑定挂载上不可靠(文件锁语义缺失);
+#   容器数据与 venv 版 data/ 目录完全隔离,可同时跑互不影响;
+# - 隧道默认继续走宿主机 cloudflared(Cloudflare 面板入口指向 localhost:8000,
+#   token 模式下 CLI 改不了 ingress,容器化隧道必须自建 Config 才能改指向);
+#   想全容器化可启用 profile tunnel 的 cloudflared(ingress 指向容器网内 sim-app)。
+
+name: audit-companion-quick
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    container_name: audit-quick-app
+    working_dir: /app/server
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      PERSISTENCE_ENABLED: "true"
+      DATA_DIR: /data
+    ports:
+      - "${QUICK_PORT:-8000}:8000"
+    volumes:
+      - ..:/app:ro
+      - quick-data:/data
+      - ./data/knowledge/index.pkl:/data/knowledge/index.pkl:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # 可选:全容器化隧道(profile tunnel 启用),ingress 指向 compose 网内 app。
+  # 注意:token 模式下 Cloudflare 面板 ingress(localhost:8000)优先于 --url,
+  # 面板公网入口必须改成 http://audit-companion-quick-app-1:8000 才能通,
+  # 所以默认仍建议宿主机 cloudflared。启用前先在面板改好入口地址。
+  cloudflared:
+    profiles: ["tunnel"]
+    image: docker.m.daocloud.io/cloudflare/cloudflared:latest
+    container_name: audit-quick-tunnel
+    command: tunnel --no-autoupdate run
+    environment:
+      # 不能用 ${CF_TUNNEL_TOKEN:?err} 必填插值:compose 对未启用 profile 的服务也做
+      # 插值,会把不带 --profile 的主 up 一起拦死;缺 token 时由 cloudflared 启动报错兜底
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  quick-data:
