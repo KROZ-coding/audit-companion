@@ -764,7 +764,7 @@ html.dark .note{background:#22304f}
         <option value="all">全课程学生</option><option value="class">当前筛选班级</option><option value="selected">已选择学生</option>
       </select>
       <input id="quizDueAt" type="datetime-local" aria-label="截止时间" title="截止时间" style="min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px">
-      <button class="btn primary sm" onclick="createQuizAssignment()">📋 组卷分发给学生</button>
+      <button class="btn primary sm" id="assignQuizBtn" onclick="createQuizAssignment()">📋 组卷分发给学生</button>
     </div>
     <div class="note">审核流程：draft → 送审 → reviewing → 通过 → published（可组卷）/ 驳回 → draft。已发布题目勾选后可组卷分发。</div>
   </div>
@@ -1992,7 +1992,9 @@ function renderAssignments(assignments,resumable=[]){
   const assignedRows=assignments.map(item=>{
     const active=item.status==='ongoing';
     const overdue=active&&item.due_at&&new Date(item.due_at)<new Date();
-    return `<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(item.title||'随堂测验')}</div><div class="qa-meta">${item.question_count} 题 · ${overdue?'已逾期':assignmentStatus(item.status)}${item.due_at?` · 截止 ${escapeHtml(formatShortDate(item.due_at))}`:''}</div></div><div class="qa-action">${active?`<button class="btn primary sm" onclick="openAssignedQuiz('${escapeHtml(item.id)}')">开始作答</button>`:`<span class="pill ${item.status==='graded'?'ok':'mid'}">${assignmentStatus(item.status)}</span>`}</div></div>`;
+    const reviewable=item.status==='graded'||item.status==='needs_review';
+    const resultAction=reviewable?`<button class="btn sm ghost" onclick="openQuizResult('${escapeHtml(item.id)}')">查看结果</button>`:'';
+    return `<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(item.title||'随堂测验')}</div><div class="qa-meta">${item.question_count} 题 · ${overdue?'已逾期':assignmentStatus(item.status)}${item.due_at?` · 截止 ${escapeHtml(formatShortDate(item.due_at))}`:''}</div></div><div class="qa-action">${active?`<button class="btn primary sm" onclick="openAssignedQuiz('${escapeHtml(item.id)}')">开始作答</button>`:`<span class="pill ${item.status==='graded'?'ok':'mid'}">${assignmentStatus(item.status)}</span>${resultAction}`}</div></div>`;
   }).join('');
   const resumableRows=resumable.map(item=>`<div class="quiz-assignment"><div class="qa-main"><div class="qa-title">${escapeHtml(item.title||'练习测验')} · 已保存作答</div><div class="qa-meta">${item.question_count} 题 · 可恢复</div></div><div class="qa-action"><button class="btn primary sm" onclick="openAssignedQuiz('${escapeHtml(item.id)}')">恢复作答</button></div></div>`).join('');
   area.innerHTML=`<div class="quiz-assignment-list"><div class="quiz-assignment-head"><b>待完成测验</b><span>选择一份继续</span></div>${assignedRows}${resumableRows}</div>`;
@@ -2009,7 +2011,7 @@ function renderQuizSession(data){
     <div class="qcard">
       <div class="qh"><span class="tag">${q.type==='single_choice'?'单选题':q.type==='multi_choice'?'多选题':q.type==='judge'?'判断题':q.type==='fill'?'填空题':q.type==='case'?'案例题':'简答题'}</span><span class="score">${q.score} 分</span></div>
       <div class="stem">${escapeHtml(q.stem)}</div>
-      ${q.type==='fill'?`<input id="ta-${q.id}" type="text" placeholder="输入你的答案…" oninput="scheduleDraftSave()">`:q.type==='short_answer'||q.type==='case'?`<textarea id="ta-${q.id}" placeholder="输入你的答案…" oninput="scheduleDraftSave()"></textarea>`:q.type==='judge'?`<div class="opts"><label><input type="radio" name="${q.id}" value="true" onchange="pickJudge('${q.id}',true)"><span>正确</span></label><label><input type="radio" name="${q.id}" value="false" onchange="pickJudge('${q.id}',false)"><span>错误</span></label></div>`:`<div class="opts">${(q.options||[]).map((option,i)=>`<label><input type="${q.type==='single_choice'?'radio':'checkbox'}" name="${q.id}" value="${i}" onchange="pick('${q.id}',${i},this.checked)"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`}
+      ${q.type==='fill'?`<input id="ta-${q.id}" type="text" placeholder="输入你的答案…" oninput="onDraftInput('${q.id}',this.value)">`:q.type==='short_answer'||q.type==='case'?`<textarea id="ta-${q.id}" placeholder="输入你的答案…" oninput="onDraftInput('${q.id}',this.value)"></textarea>`:q.type==='judge'?`<div class="opts"><label><input type="radio" name="${q.id}" value="true" onchange="pickJudge('${q.id}',true)"><span>正确</span></label><label><input type="radio" name="${q.id}" value="false" onchange="pickJudge('${q.id}',false)"><span>错误</span></label></div>`:`<div class="opts">${(q.options||[]).map((option,i)=>`<label><input type="${q.type==='single_choice'?'radio':'checkbox'}" name="${q.id}" value="${i}" onchange="pick('${q.id}',${i},this.checked)"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`}
     </div>`).join('');
   LIVE_QUESTIONS.forEach(question=>{
     const saved=studentAns[question.id];
@@ -2028,12 +2030,38 @@ function renderQuizSession(data){
 }
 async function openAssignedQuiz(id){
   const area=document.getElementById('quizArea');if(!area)return;
+  await flushDraft();
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
   try{renderQuizSession(await apiRequest(`/api/quiz/${encodeURIComponent(id)}`));}
   catch(error){showApiError(area,error.message||'试卷加载失败');}
 }
+async function openQuizResult(id){
+  /* 正式测验的完整结果回看:复用按 session_id 的批改结果接口与试卷详情,不依赖提交页面的局部答案 */
+  const grade=document.getElementById('gradeArea');if(!grade)return;
+  const submitButton=document.getElementById('submitBtn');if(submitButton)submitButton.disabled=true;
+  grade.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
+  try{
+    const [result,detail]=await Promise.all([
+      apiRequest(`/api/grading/${encodeURIComponent(id)}/status`),
+      apiRequest(`/api/quiz/${encodeURIComponent(id)}`),
+    ]);
+    const questions=detail.questions||[];
+    const answers=result.submitted_answers||{};
+    let total=0,max=0;
+    const rows=(result.per_question||[]).map(item=>{
+      const q=questions.find(question=>question.id===item.question_id);
+      const score=Number(item.score);const maxScore=Number(item.max_score);total+=score;max+=maxScore;
+      const cls=score===maxScore?'g-ok':score?'g-half':'g-bad';
+      return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(q?.stem||item.question_id)} · ${escapeHtml(item.method)}</span><span>${score} / ${maxScore} 分</span></div><div class="why">✦ 学生答案：${textHtml(answerText(q||{},answers[item.question_id]))}</div><div class="why">✦ 批改意见：${escapeHtml(item.why)}</div></div>`;
+    }).join('');
+    const heading=result.status==='needs_review'?'已提交，等待教师复核':'测验结果';
+    grade.innerHTML=`<div style="margin-top:12px">${rows}<div class="grade g-ok"><div class="gh"><span>${escapeHtml(heading)}</span><span>${total} / ${max} 分</span></div></div></div>`;
+    grade.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(error){showApiError(grade,error.message||'结果加载失败');}
+}
 async function startRandomQuiz(){
   const area=document.getElementById('quizArea');if(!area)return;
+  await flushDraft();
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
   try{renderQuizSession(await apiRequest('/api/quiz/start',{method:'POST',body:JSON.stringify({course_id:LIVE_COURSE_ID,counts:{single:1,multi:1,short:1}})}));}
   catch(error){showApiError(area,error.message||'测验加载失败');}
@@ -2041,6 +2069,7 @@ async function startRandomQuiz(){
 async function renderQuiz(){
   const area=document.getElementById('quizArea');
   if(!area)return;
+  await flushDraft();
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
   document.getElementById('gradeArea').innerHTML='';
   document.getElementById('submitBtn').disabled=true;
@@ -2079,26 +2108,52 @@ function pick(id,index,checked){
 }
 function pickJudge(id,value){studentAns[id]=value;scheduleDraftSave();}
 let DRAFT_TIMER=null;
+let DRAFT_PENDING=null;   /* {sessionId,answers}:安排保存时固化的试卷与答案快照 */
 function currentDraftAnswers(){
-  const answers={...studentAns};LIVE_QUESTIONS.forEach(q=>{if(['fill','short_answer','case'].includes(q.type))answers[q.id]=document.getElementById('ta-'+q.id)?.value||'';});
+  const answers={...studentAns};
+  LIVE_QUESTIONS.forEach(q=>{
+    if(!['fill','short_answer','case'].includes(q.type))return;
+    const input=document.getElementById('ta-'+q.id);
+    /* 只在输入框仍存在时读 DOM:切卷后输入框已被移除,不能把空串当成学生答案写回草稿 */
+    if(input)answers[q.id]=input.value;
+  });
   return answers;
+}
+function onDraftInput(qid,value){
+  studentAns[qid]=value;
+  scheduleDraftSave();
 }
 function scheduleDraftSave(){
   if(!LIVE_QUIZ||LIVE_QUIZ.status!=='ongoing')return;
+  /* 快照必须在安排时固化:2 秒后可能已经切换到别的试卷,不能再读全局当前试卷 */
+  DRAFT_PENDING={sessionId:LIVE_QUIZ.id,answers:currentDraftAnswers()};
   const note=document.getElementById('draftNote');if(note)note.textContent='正在自动保存…';
   if(DRAFT_TIMER)clearTimeout(DRAFT_TIMER);
-  DRAFT_TIMER=setTimeout(()=>{DRAFT_TIMER=null;void saveDraft();},2000);
+  DRAFT_TIMER=setTimeout(()=>{
+    DRAFT_TIMER=null;
+    const pending=DRAFT_PENDING;DRAFT_PENDING=null;
+    if(pending)void saveDraft(pending.sessionId,pending.answers);
+  },2000);
 }
-async function saveDraft(){
-  if(!LIVE_QUIZ||LIVE_QUIZ.status!=='ongoing')return;
+async function saveDraft(sessionId,answers){
+  if(!sessionId)return;
   try{
-    const data=await apiRequest(`/api/quiz/${LIVE_QUIZ.id}/draft`,{method:'POST',body:JSON.stringify({answers:currentDraftAnswers()})});
+    const data=await apiRequest(`/api/quiz/${encodeURIComponent(sessionId)}/draft`,{method:'POST',body:JSON.stringify({answers})});
+    /* 响应晚于切卷时,只更新仍属于该试卷的提示,不污染当前试卷 */
+    if(!LIVE_QUIZ||LIVE_QUIZ.id!==sessionId)return;
     const note=document.getElementById('draftNote');
     if(note)note.textContent=data.draft_updated_at?`已自动保存 ${formatShortDate(data.draft_updated_at)}`:'';
   }catch(error){/* 静默失败：下次作答改动会再次尝试 */}
 }
+async function flushDraft(){
+  /* 切换试卷前先把待保存的草稿落盘,避免最后 2 秒内的输入丢失 */
+  if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
+  const pending=DRAFT_PENDING;DRAFT_PENDING=null;
+  if(pending)await saveDraft(pending.sessionId,pending.answers);
+}
 function clearDraftUi(){
   if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
+  DRAFT_PENDING=null;
   const note=document.getElementById('draftNote');if(note)note.textContent='';
 }
 function answerText(question,answer){
@@ -2377,6 +2432,10 @@ function updateQuizBar(){
   bar.style.display=BANK_SELECTED.size?'flex':'none';
   const count=document.getElementById('quizSelectCount');if(count)count.textContent=BANK_SELECTED.size;
 }
+let ASSIGN_ATTEMPT=null;   /* {signature,key}:同一份布置失败重试时复用幂等键,避免重复作业 */
+function assignIdempotencyKey(){
+  return 'assign-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+}
 async function createQuizAssignment(){
   if(!BANK_SELECTED.size){alert('请先勾选已发布题目');return;}
   const title=document.getElementById('quizTitle')?.value?.trim()||'随堂测验';
@@ -2393,12 +2452,20 @@ async function createQuizAssignment(){
   if(dueAt)body.due_at=new Date(dueAt).toISOString();
   const targetLabel=target==='all'?'全课程':target==='class'?body.class_name:`${body.student_ids?.length||0} 名所选学生`;
   if(!confirm(`将「${title}」布置给${targetLabel}，共 ${BANK_SELECTED.size} 道题？`))return;
+  /* 同一份内容在“结果未知”时重试沿用同一幂等键;成功后才允许下一次全新布置 */
+  const signature=JSON.stringify(body);
+  if(!ASSIGN_ATTEMPT||ASSIGN_ATTEMPT.signature!==signature)ASSIGN_ATTEMPT={signature,key:assignIdempotencyKey()};
+  body.idempotency_key=ASSIGN_ATTEMPT.key;
+  const button=document.getElementById('assignQuizBtn');
+  if(button){if(button.disabled)return;button.disabled=true;}
   try{
     const result=await apiRequest('/api/quiz/assign',{method:'POST',body:JSON.stringify(body)});
+    ASSIGN_ATTEMPT=null;
     BANK_SELECTED.clear();updateQuizBar();
-    alert(`「${title}」已布置给 ${result.student_count} 名学生`);
+    alert(result.idempotent_replay?`「${title}」此前已布置成功，本次为重复提交，未重复创建`:`「${title}」已布置给 ${result.student_count} 名学生`);
     await loadTeacherAssignments();
   }catch(error){alert(error.message||'组卷失败');}
+  finally{if(button)button.disabled=false;}
 }
 let TEACHER_ASSIGNMENTS=[];
 async function loadTeacherAssignments(){

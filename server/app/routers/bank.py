@@ -398,7 +398,7 @@ async def import_questions(
 
 
 @router.post("/import/{preview_id}/confirm", status_code=201)
-def confirm_import(
+async def confirm_import(
     preview_id: str,
     user: User = Depends(require_roles("teacher", "admin")),
     store: Store = Depends(get_store),
@@ -412,8 +412,18 @@ def confirm_import(
         raise HTTPException(status_code=409, detail={"code": "empty_import", "message": "没有可导入的有效题目"})
     if any(store.question_code_exists(row["code"]) for row in preview["rows"]):
         raise HTTPException(status_code=409, detail={"code": "duplicate_question_code", "message": "题目编码已存在，请重新生成预览"})
+    # 预览创建后课程可能已被转交或删除:确认写入前按当前归属重新鉴权。
+    for row in preview["rows"]:
+        row_course_id = row.get("course_id")
+        if row_course_id is None:
+            continue
+        if row_course_id not in store.courses:
+            raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "目标课程不存在，请重新生成预览"})
+        if not store.can_access_course(user, row_course_id, teaching=True):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权向该课程题库导入题目"})
 
     created: list[QuestionOut] = []
+    created_ids: list[str] = []
     with store.lock:
         for row in preview["rows"]:
             question = Question(
@@ -425,8 +435,20 @@ def confirm_import(
             )
             store.add_question(question)
             created.append(question_out(question))
+            created_ids.append(question.id)
         del store.import_previews[preview_id]
-    store.audit("question_import_confirm", user.id, {"preview_id": preview_id, "count": len(created)})
+    audit_entry = store.audit("question_import_confirm", user.id, {"preview_id": preview_id, "count": len(created)})
+    # 导入同样整体提交:保存失败就撤销本次新增,不留下只存在于内存的“成功导入”。
+    if not await store.save_async():
+        with store.lock:
+            for question_id in created_ids:
+                store.questions.pop(question_id, None)
+            store.import_previews[preview_id] = preview
+            try:
+                store.audit_logs.remove(audit_entry)
+            except ValueError:
+                pass
+        raise HTTPException(status_code=503, detail={"code": "persistence_failed", "message": "业务数据暂未可靠保存，请联系管理员"})
     return {"status": "created", "count": len(created), "questions": [item.model_dump() for item in created]}
 
 

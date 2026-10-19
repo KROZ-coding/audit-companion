@@ -15,6 +15,9 @@ set "TOKEN_FILE=%USERPROFILE%\AppData\Local\Temp\cf_tunnel_token.txt"
 set "APP_PORT=8000"
 set "APP_URL=http://127.0.0.1:%APP_PORT%"
 set "PUBLIC_URL=https://audit-companion.xyz"
+rem Keep persistence consistent with the PowerShell/Docker launchers:
+rem without it a newly started app keeps all state in memory only.
+set "PERSISTENCE_ENABLED=true"
 
 echo.
 echo  [1/5] Checking environment...
