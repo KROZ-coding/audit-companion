@@ -421,6 +421,14 @@ class Store:
         with self.lock:
             self._dirty += 1
 
+    def discard_audit(self, entry: dict[str, Any]) -> None:
+        """撤销一次未提交事务写入的审计条目(按对象身份,不影响并发请求的日志)。"""
+        with self.lock:
+            try:
+                self.audit_logs.remove(entry)
+            except ValueError:
+                pass
+
     async def save_async(self) -> bool:
         if not self.persistence_enabled:
             return True
