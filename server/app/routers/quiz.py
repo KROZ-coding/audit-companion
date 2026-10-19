@@ -515,6 +515,9 @@ async def submit(
             session.submitted_answers = dict(payload.answers)
             session.draft_answers = dict(payload.answers)
             session.draft_updated_at = datetime.now(timezone.utc)
+            # apply_grading_result 已按知识点累加掌握度;结果移除后全量重算即恢复提交前状态,
+            # 否则“失败 503 后重试”会把同一次作答在 EMA 里计两次。
+            store.rebuild_mastery()
             store.mark_dirty()
         raise HTTPException(
             status_code=503,

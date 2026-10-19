@@ -1973,6 +1973,8 @@ let LIVE_QUIZ=null;
 let LIVE_QUESTIONS=[];
 let LIVE_COURSE_ID=null;
 let LIVE_ASSIGNMENTS=[];
+/* 视图代次:每次新试卷/列表上屏加一,异步响应回来时比对,防迟到响应污染当前作答 */
+let QUIZ_VIEW_EPOCH=0;
 async function ensureCourseId(){
   if(LIVE_COURSE_ID)return LIVE_COURSE_ID;
   const courses=await apiRequest('/api/courses');
@@ -2002,6 +2004,8 @@ function renderAssignments(assignments,resumable=[]){
 }
 function renderQuizSession(data){
   const area=document.getElementById('quizArea');
+  /* 新试卷上屏即作废更早发出的异步视图:迟到的旧试卷/结果响应不会再覆盖当前作答 */
+  QUIZ_VIEW_EPOCH++;
   LIVE_QUIZ=data;LIVE_QUESTIONS=data.questions||[];
   /* 已提交答案优先于草稿(后端已裁剪 draft 中的重叠键,这里顺序只为兜底旧缓存) */
   studentAns={...(data.draft_answers||{}),...(data.saved_answers||{})};
@@ -2032,20 +2036,29 @@ function renderQuizSession(data){
 async function openAssignedQuiz(id){
   const area=document.getElementById('quizArea');if(!area)return;
   await flushDraft();
+  /* 请求前取代次:响应回来时若用户已点开别的试卷,丢弃本次响应,防止 A 晚到覆盖 B */
+  const viewEpoch=QUIZ_VIEW_EPOCH;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
-  try{renderQuizSession(await apiRequest(`/api/quiz/${encodeURIComponent(id)}`));}
-  catch(error){showApiError(area,error.message||'试卷加载失败');}
+  try{
+    const data=await apiRequest(`/api/quiz/${encodeURIComponent(id)}`);
+    if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
+    renderQuizSession(data);
+  }
+  catch(error){if(viewEpoch===QUIZ_VIEW_EPOCH)showApiError(area,error.message||'试卷加载失败');}
 }
 async function openQuizResult(id){
   /* 正式测验的完整结果回看:复用按 session_id 的批改结果接口与试卷详情,不依赖提交页面的局部答案 */
   const grade=document.getElementById('gradeArea');if(!grade)return;
   const submitButton=document.getElementById('submitBtn');if(submitButton)submitButton.disabled=true;
+  const viewEpoch=QUIZ_VIEW_EPOCH;
   grade.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
   try{
     const [result,detail]=await Promise.all([
       apiRequest(`/api/grading/${encodeURIComponent(id)}/status`),
       apiRequest(`/api/quiz/${encodeURIComponent(id)}`),
     ]);
+    /* 用户已开始作答别的试卷时,迟到的结果响应不得写进当前答题页 */
+    if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
     const questions=detail.questions||[];
     const answers=result.submitted_answers||{};
     let total=0,max=0;
@@ -2058,24 +2071,31 @@ async function openQuizResult(id){
     const heading=result.status==='needs_review'?'已提交，等待教师复核':'测验结果';
     grade.innerHTML=`<div style="margin-top:12px">${rows}<div class="grade g-ok"><div class="gh"><span>${escapeHtml(heading)}</span><span>${total} / ${max} 分</span></div></div></div>`;
     grade.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(error){showApiError(grade,error.message||'结果加载失败');}
+  }catch(error){if(viewEpoch===QUIZ_VIEW_EPOCH)showApiError(grade,error.message||'结果加载失败');}
 }
 async function startRandomQuiz(){
   const area=document.getElementById('quizArea');if(!area)return;
   await flushDraft();
+  const viewEpoch=QUIZ_VIEW_EPOCH;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
-  try{renderQuizSession(await apiRequest('/api/quiz/start',{method:'POST',body:JSON.stringify({course_id:LIVE_COURSE_ID,counts:{single:1,multi:1,short:1}})}));}
-  catch(error){showApiError(area,error.message||'测验加载失败');}
+  try{
+    const data=await apiRequest('/api/quiz/start',{method:'POST',body:JSON.stringify({course_id:LIVE_COURSE_ID,counts:{single:1,multi:1,short:1}})});
+    if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
+    renderQuizSession(data);
+  }
+  catch(error){if(viewEpoch===QUIZ_VIEW_EPOCH)showApiError(area,error.message||'测验加载失败');}
 }
 async function renderQuiz(){
   const area=document.getElementById('quizArea');
   if(!area)return;
   await flushDraft();
+  const viewEpoch=QUIZ_VIEW_EPOCH;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
   document.getElementById('gradeArea').innerHTML='';
   document.getElementById('submitBtn').disabled=true;
   try{
     const courses=await apiRequest('/api/courses');
+    if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
     const selector=document.getElementById('quizCourse');
     if(!courses.length)throw new Error('当前账号没有可用课程');
     const selected=LIVE_COURSE_ID&&courses.some(course=>course.id===LIVE_COURSE_ID)?LIVE_COURSE_ID:courses[0].id;
@@ -2087,6 +2107,7 @@ async function renderQuiz(){
       if(CURRENT.role==='student'){
         LIVE_ASSIGNMENTS=await apiRequest(`/api/quiz/assignments?course_id=${encodeURIComponent(LIVE_COURSE_ID)}`);
         const resumable=await apiRequest(`/api/quiz/resumable?course_id=${encodeURIComponent(LIVE_COURSE_ID)}`);
+        if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
         renderAssignments(LIVE_ASSIGNMENTS,resumable);
         if(LIVE_ASSIGNMENTS.some(item=>item.status==='ongoing')||resumable.length){
           LIVE_QUIZ=null;LIVE_QUESTIONS=[];studentAns={};
@@ -2094,8 +2115,12 @@ async function renderQuiz(){
           area.innerHTML='<div class="desc">选择上方测验后继续答题。</div>';return;
        }
      }
-     area.innerHTML='<div class="desc">老师还没有给你布置测验。可以先把课程过一遍,等布置后这里会出现「待完成测验」;<br>想立即练习?去上方 <b>🧠 AI 练习</b> 根据你的提问生成专属题目,或<button class="btn sm primary" style="margin:0 4px" onclick="startRandomQuiz()">随机来一组</button>(需题库题型齐备)。</div>';
-  }catch(error){showApiError(area,error.message||'测验加载失败');}
+    /* 课程没有任何可作答内容时同样清掉上一份试卷的全局状态:
+       否则切到空课程后 LIVE_QUIZ 还指向旧卷,pagehide 可能向已不可作答的会话补发草稿 */
+    LIVE_QUIZ=null;LIVE_QUESTIONS=[];studentAns={};
+    const desc=document.getElementById('quizDesc');if(desc)desc.textContent='';
+    area.innerHTML='<div class="desc">老师还没有给你布置测验。可以先把课程过一遍,等布置后这里会出现「待完成测验」;<br>想立即练习?去上方 <b>🧠 AI 练习</b> 根据你的提问生成专属题目,或<button class="btn sm primary" style="margin:0 4px" onclick="startRandomQuiz()">随机来一组</button>(需题库题型齐备)。</div>';
+  }catch(error){if(viewEpoch===QUIZ_VIEW_EPOCH)showApiError(area,error.message||'测验加载失败');}
 }
 function changeStudentCourse(courseId){
   LIVE_COURSE_ID=courseId;
@@ -2110,6 +2135,11 @@ function pick(id,index,checked){
 function pickJudge(id,value){studentAns[id]=value;scheduleDraftSave();}
 let DRAFT_TIMER=null;
 let DRAFT_PENDING=null;   /* {sessionId,answers}:安排保存时固化的试卷与答案快照 */
+let DRAFT_INFLIGHT=null;  /* 最近一次排队/在途的保存:{sessionId,answers,seq,done} */
+const DRAFT_RETRY={};     /* sessionId -> answers:保存失败的最新快照,自动重试+离开页面兜底 */
+let DRAFT_SEQ=0;
+const DRAFT_ISSUED={};    /* sessionId -> 最近一次排队的保存序号,排队期间同卷旧快照作废 */
+let DRAFT_CHAIN=Promise.resolve();  /* 保存串行链:草稿是整份替换,必须按发出顺序到达服务器 */
 function currentDraftAnswers(){
   const answers={...studentAns};
   LIVE_QUESTIONS.forEach(q=>{
@@ -2136,36 +2166,79 @@ function scheduleDraftSave(){
     if(pending)void saveDraft(pending.sessionId,pending.answers);
   },2000);
 }
-async function saveDraft(sessionId,answers){
-  if(!sessionId)return;
-  try{
-    const data=await apiRequest(`/api/quiz/${encodeURIComponent(sessionId)}/draft`,{method:'POST',body:JSON.stringify({answers})});
-    /* 响应晚于切卷时,只更新仍属于该试卷的提示,不污染当前试卷 */
-    if(!LIVE_QUIZ||LIVE_QUIZ.id!==sessionId)return;
-    const note=document.getElementById('draftNote');
-    if(note)note.textContent=data.draft_updated_at?`已自动保存 ${formatShortDate(data.draft_updated_at)}`:'';
-  }catch(error){/* 静默失败：下次作答改动会再次尝试 */}
+function saveDraft(sessionId,answers){
+  if(!sessionId)return Promise.resolve();
+  const seq=++DRAFT_SEQ;DRAFT_ISSUED[sessionId]=seq;
+  const request={sessionId,answers,seq,done:null};
+  DRAFT_INFLIGHT=request;
+  const run=async()=>{
+    /* 排到串行链时同卷已有更新的快照:旧快照直接作废,整份替换语义下最新快照即权威 */
+    if(DRAFT_ISSUED[sessionId]!==seq)return;
+    try{
+      const data=await apiRequest(`/api/quiz/${encodeURIComponent(sessionId)}/draft`,{method:'POST',body:JSON.stringify({answers})});
+      delete DRAFT_RETRY[sessionId];
+      /* 响应晚于切卷时,只更新仍属于该试卷的提示,不污染当前试卷 */
+      if(!LIVE_QUIZ||LIVE_QUIZ.id!==sessionId||LIVE_QUIZ.status!=='ongoing')return;
+      const note=document.getElementById('draftNote');
+      if(note)note.textContent=data.draft_updated_at?`已自动保存 ${formatShortDate(data.draft_updated_at)}`:'';
+    }catch(error){
+      /* 保存失败保留快照:5 秒后自动重试,期间输入会用新内容顶替,离开页面时 sendBeacon 兜底 */
+      DRAFT_RETRY[sessionId]=answers;
+      if(LIVE_QUIZ&&LIVE_QUIZ.id===sessionId&&LIVE_QUIZ.status==='ongoing'){
+        const note=document.getElementById('draftNote');
+        if(note)note.textContent='自动保存失败，将继续重试';
+      }
+      scheduleDraftRetry();
+    }finally{
+      if(DRAFT_INFLIGHT&&DRAFT_INFLIGHT.seq===seq)DRAFT_INFLIGHT=null;
+    }
+  };
+  request.done=DRAFT_CHAIN.then(run,run);
+  DRAFT_CHAIN=request.done.catch(()=>{});
+  return request.done;
+}
+function scheduleDraftRetry(){
+  /* 输入保存计时器还在时不抢:它携带更新内容,失败后同样会进入重试 */
+  if(DRAFT_TIMER)return;
+  DRAFT_TIMER=setTimeout(()=>{
+    DRAFT_TIMER=null;
+    for(const [sid,answers] of Object.entries({...DRAFT_RETRY}))saveDraft(sid,answers);
+  },5000);
 }
 async function flushDraft(){
-  /* 切换试卷前先把待保存的草稿落盘,避免最后 2 秒内的输入丢失 */
+  /* 切换试卷前把草稿落盘:待发快照补发(自动排在在途之后),失败快照重试,再等在途请求确认 */
   if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
   const pending=DRAFT_PENDING;DRAFT_PENDING=null;
   if(pending)await saveDraft(pending.sessionId,pending.answers);
+  const retries={...DRAFT_RETRY};
+  await Promise.all(Object.entries(retries).map(([sid,answers])=>saveDraft(sid,answers)));
+  if(DRAFT_INFLIGHT)await DRAFT_INFLIGHT.done;
 }
-/* 关闭/刷新页面时同步补发一次草稿:异步请求会随页面销毁被取消,只能用 sendBeacon */
+/* 关闭/刷新页面时异步请求会随页面销毁被取消:失败待重试、在途与待发的数据都用 sendBeacon 兜底;
+   同卷多条按旧→新排列,服务器整份替换后以最后一条为准 */
 window.addEventListener('pagehide',()=>{
-  const pending=DRAFT_PENDING||(DRAFT_TIMER&&LIVE_QUIZ?{sessionId:LIVE_QUIZ.id,answers:currentDraftAnswers()}:null);
-  if(!pending||!navigator.sendBeacon)return;
+  if(!navigator.sendBeacon)return;
+  const payloads=[];
+  for(const [sessionId,answers] of Object.entries(DRAFT_RETRY))payloads.push({sessionId,answers});
+  if(DRAFT_INFLIGHT)payloads.push(DRAFT_INFLIGHT);
+  if(DRAFT_PENDING)payloads.push(DRAFT_PENDING);
+  /* 定时器兜底只在没有待发快照且失败重试未覆盖当前试卷时使用,避免同一内容重复补发 */
+  if(DRAFT_TIMER&&!DRAFT_PENDING&&LIVE_QUIZ&&LIVE_QUIZ.status==='ongoing'&&!DRAFT_RETRY[LIVE_QUIZ.id]){
+    payloads.push({sessionId:LIVE_QUIZ.id,answers:currentDraftAnswers()});
+  }
+  if(!payloads.length)return;
   try{
-    navigator.sendBeacon(`/api/quiz/${encodeURIComponent(pending.sessionId)}/draft`,
-      new Blob([JSON.stringify({answers:pending.answers})],{type:'application/json'}));
-    DRAFT_PENDING=null;
-    if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
+    payloads.forEach(payload=>navigator.sendBeacon(
+      `/api/quiz/${encodeURIComponent(payload.sessionId)}/draft`,
+      new Blob([JSON.stringify({answers:payload.answers})],{type:'application/json'})));
   }catch(error){/* 页面即将销毁,失败时依赖下次输入重试 */}
+  DRAFT_PENDING=null;
+  if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
 });
 function clearDraftUi(){
   if(DRAFT_TIMER){clearTimeout(DRAFT_TIMER);DRAFT_TIMER=null;}
   DRAFT_PENDING=null;
+  if(LIVE_QUIZ)delete DRAFT_RETRY[LIVE_QUIZ.id];
   const note=document.getElementById('draftNote');if(note)note.textContent='';
 }
 function answerText(question,answer){
@@ -2177,28 +2250,37 @@ function answerText(question,answer){
 async function submitQuiz(){
   if(!LIVE_QUIZ)return;
   clearDraftUi();
+  /* 提交那一刻固化试卷与作答:轮询和渲染只看快照,中途切卷/重开不再串写 */
+  const submitted={quizId:LIVE_QUIZ.id,questions:LIVE_QUESTIONS,answers:{...studentAns}};
+  LIVE_QUESTIONS.forEach(q=>{if(['fill','short_answer','case'].includes(q.type))submitted.answers[q.id]=document.getElementById('ta-'+q.id)?.value||'';});
+  const viewEpoch=QUIZ_VIEW_EPOCH;
   const button=document.getElementById('submitBtn');const area=document.getElementById('gradeArea');
   button.disabled=true;area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
-   const answers={...studentAns};LIVE_QUESTIONS.forEach(q=>{if(['fill','short_answer','case'].includes(q.type))answers[q.id]=document.getElementById('ta-'+q.id)?.value||'';});
   try{
-     const data=await apiRequest(`/api/quiz/${LIVE_QUIZ.id}/submit`,{method:'POST',body:JSON.stringify({answers})});
+     const data=await apiRequest(`/api/quiz/${encodeURIComponent(submitted.quizId)}/submit`,{method:'POST',body:JSON.stringify({answers:submitted.answers})});
      let result=data.result;
-     while(result?.status==='grading'){
+     while(result?.status==='grading'&&viewEpoch===QUIZ_VIEW_EPOCH){
        area.innerHTML='<div class="typing"><i></i><i></i><i></i></div><div class="desc" style="margin-top:8px">批改进行中，请稍候…</div>';
        await new Promise(resolve=>setTimeout(resolve,1000));
-       result=await apiRequest(`/api/grading/${LIVE_QUIZ.id}/status`);
+       result=await apiRequest(`/api/grading/${encodeURIComponent(submitted.quizId)}/status`);
      }
+     /* 等待批改期间用户已打开别的试卷:本次结果只在回看里,不再写当前答题页 */
+     if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
      if(!result||result.status==='grading_failed')throw new Error('批改未完成，请稍后查看结果');
      const finalResult=result;let total=0,max=0;
      const rows=finalResult.per_question.map(item=>{
-      const q=LIVE_QUESTIONS.find(question=>question.id===item.question_id);const score=Number(item.score);const maxScore=Number(item.max_score);total+=score;max+=maxScore;
+      const q=submitted.questions.find(question=>question.id===item.question_id);const score=Number(item.score);const maxScore=Number(item.max_score);total+=score;max+=maxScore;
       const cls=score===maxScore?'g-ok':score?'g-half':'g-bad';
       const points=(item.per_point||[]).map(point=>`${escapeHtml(point.point)} ${point.matched?'✓':'✗'}`).join('；');
-      return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(q?.stem||item.question_id)} · ${escapeHtml(item.method)}</span><span>${score} / ${maxScore} 分</span></div><div class="why">✦ 学生答案：${textHtml(answerText(q||{},answers[item.question_id]))}</div><div class="why">✦ 批改意见：${escapeHtml(item.why)}${points?` · 要点：${points}`:''}</div></div>`;
+      return `<div class="grade ${cls}"><div class="gh"><span>${escapeHtml(q?.stem||item.question_id)} · ${escapeHtml(item.method)}</span><span>${score} / ${maxScore} 分</span></div><div class="why">✦ 学生答案：${textHtml(answerText(q||{},submitted.answers[item.question_id]))}</div><div class="why">✦ 批改意见：${escapeHtml(item.why)}${points?` · 要点：${points}`:''}</div></div>`;
     }).join('');
      showGrades(area,{rows,total,max},finalResult.status==='needs_review'?'已提交，等待教师复核':'本次测验');
     area.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(error){showApiError(area,error.message||'提交失败');button.disabled=false;}
+  }catch(error){
+    if(viewEpoch!==QUIZ_VIEW_EPOCH)return;
+    showApiError(area,error.message||'提交失败');
+    if(LIVE_QUIZ&&LIVE_QUIZ.id===submitted.quizId)button.disabled=false;
+  }
 }
 /* ===== P1b AI 练习 ===== */
 let PRACTICE=null;let PRACTICE_QUESTIONS=[];let practiceAns={};
@@ -2448,8 +2530,22 @@ let ASSIGN_ATTEMPT=null;   /* {signature,key}:同一份布置失败重试时复�
 function assignIdempotencyKey(){
   return 'assign-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
 }
+function loadAssignAttempt(){
+  /* 幂等键跨页面刷新保留:提交后断网/崩掉重开页面时,重试仍复用同一把键,不会重复布置 */
+  try{
+    const stored=sessionStorage.getItem('assignAttempt');
+    if(stored)ASSIGN_ATTEMPT=JSON.parse(stored);
+  }catch(error){/* 存储不可用时退回仅页面内复用 */}
+}
+function storeAssignAttempt(){
+  try{
+    if(ASSIGN_ATTEMPT)sessionStorage.setItem('assignAttempt',JSON.stringify(ASSIGN_ATTEMPT));
+    else sessionStorage.removeItem('assignAttempt');
+  }catch(error){/* 存储不可用时退回仅页面内复用 */}
+}
 async function createQuizAssignment(){
   if(!BANK_SELECTED.size){alert('请先勾选已发布题目');return;}
+  loadAssignAttempt();
   const title=document.getElementById('quizTitle')?.value?.trim()||'随堂测验';
   const body={course_id:await ensureCourseId(),title,question_ids:[...BANK_SELECTED]};
   const target=document.getElementById('quizTarget')?.value||'all';
@@ -2464,15 +2560,17 @@ async function createQuizAssignment(){
   if(dueAt)body.due_at=new Date(dueAt).toISOString();
   const targetLabel=target==='all'?'全课程':target==='class'?body.class_name:`${body.student_ids?.length||0} 名所选学生`;
   if(!confirm(`将「${title}」布置给${targetLabel}，共 ${BANK_SELECTED.size} 道题？`))return;
-  /* 同一份内容在“结果未知”时重试沿用同一幂等键;成功后才允许下一次全新布置 */
-  const signature=JSON.stringify(body);
+  /* 同一份内容在“结果未知”时重试沿用同一幂等键;成功后才允许下一次全新布置。
+     签名对题号排序:勾选顺序变化不算换内容,避免把同一份卷子布置成两份 */
+  const signature=JSON.stringify({...body,question_ids:[...body.question_ids].sort()});
   if(!ASSIGN_ATTEMPT||ASSIGN_ATTEMPT.signature!==signature)ASSIGN_ATTEMPT={signature,key:assignIdempotencyKey()};
+  storeAssignAttempt();
   body.idempotency_key=ASSIGN_ATTEMPT.key;
   const button=document.getElementById('assignQuizBtn');
   if(button){if(button.disabled)return;button.disabled=true;}
   try{
     const result=await apiRequest('/api/quiz/assign',{method:'POST',body:JSON.stringify(body)});
-    ASSIGN_ATTEMPT=null;
+    ASSIGN_ATTEMPT=null;storeAssignAttempt();
     BANK_SELECTED.clear();updateQuizBar();
     alert(result.idempotent_replay?`「${title}」此前已布置成功，本次为重复提交，未重复创建`:`「${title}」已布置给 ${result.student_count} 名学生`);
     await loadTeacherAssignments();
@@ -2788,10 +2886,13 @@ async function summarizeDocument(button){
 
 async function buildReport(){
   const rep=document.getElementById('repArea');if(!rep)return;
+  /* 学生分支以发起时的课程为准:慢响应回来时若已切到别的课程,丢弃旧课程学情 */
+  const requestedCourse=CURRENT.role==='student'?LIVE_COURSE_ID:null;
   try{
     if(CURRENT.role==='student'){
-      const course=LIVE_COURSE_ID?`course_id=${encodeURIComponent(LIVE_COURSE_ID)}`:'';
+      const course=requestedCourse?`course_id=${encodeURIComponent(requestedCourse)}`:'';
       const [data,history]=await Promise.all([apiRequest(`/api/progress/me${course?`?${course}`:''}`),apiRequest(`/api/progress/history?limit=100${course?`&${course}`:''}`)]);
+      if(CURRENT.role==='student'&&LIVE_COURSE_ID!==requestedCourse)return;
       const rows=(data.mastery||[]).filter(row=>row.attempts>0).sort((a,b)=>a.mastery-b.mastery);
       const latest=history.find(item=>item.status==='graded');
       const weak=rows.filter(row=>row.attempts>=2&&row.mastery<60).length,mastered=rows.filter(row=>row.attempts>=2&&row.mastery>=80).length;
