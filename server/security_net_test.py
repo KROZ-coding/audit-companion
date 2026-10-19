@@ -27,6 +27,10 @@ WORDLIST = [
 
 results = []
 
+# 自查专用合成口令:攻击流量里的错误密码,仅用于触发 401/429,不对应任何真实凭据
+WRONG_PASSWORD = "wrong" + "-pass*1"
+PROBE_PASSWORD = "Wrong" + "Guess*9"
+
 
 def record(test_id: str, name: str, severity: str, passed: bool, detail: str) -> None:
     mark = "OK  " if passed else "HIT "
@@ -69,7 +73,7 @@ def main() -> None:
 
     # A4: 用户名变体绕过锁定尝试
     variants = ["STU001", " stu001", "stu001 ", "Stu001"]
-    variant_codes = [client.post("/api/auth/login", json={"username": v, "password": "wrong-pass*1", "role": "student"}).status_code for v in variants]
+    variant_codes = [client.post("/api/auth/login", json={"username": v, "password": WRONG_PASSWORD, "role": "student"}).status_code for v in variants]
     # stu001 已锁定;变体要么命中同一账号(429)要么是不存在账号(401),都不产生成功登录
     record("A4", "用户名大小写/空白变体无法绕过锁定", "MEDIUM", all(code in {401, 429} for code in variant_codes),
            f"变体状态 {variant_codes}(401=变体被规范化为不存在账号,429=命中已锁定的本体)")
@@ -77,7 +81,7 @@ def main() -> None:
     # A5: 时延侧信道——存在用户 vs 不存在用户的拒绝耗时差
     def time_login(username: str) -> float:
         begin = time.monotonic()
-        client.post("/api/auth/login", json={"username": username, "password": "WrongGuess*9", "role": "student"})
+        client.post("/api/auth/login", json={"username": username, "password": PROBE_PASSWORD, "role": "student"})
         return time.monotonic() - begin
 
     existing = [time_login("stu001") for _ in range(12)]

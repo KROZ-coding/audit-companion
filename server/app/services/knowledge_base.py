@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Iterable
 from zipfile import ZipFile
-from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as ET
 
 try:
     import jieba

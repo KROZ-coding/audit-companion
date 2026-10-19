@@ -4,7 +4,7 @@ import json
 import posixpath
 from typing import Literal
 from zipfile import BadZipFile, ZipFile
-from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as ET
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status

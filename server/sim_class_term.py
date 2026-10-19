@@ -24,6 +24,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 
@@ -166,6 +167,7 @@ def main():
     parser.add_argument("--seed", type=int, default=2026, help="随机种子(可复现)")
     parser.add_argument("--class-prefix", default="sim", help="学生用户名前缀(如 sim → sim01)")
     parser.add_argument("--course-id", default="sim-term", help="模拟课程编号")
+    parser.add_argument("--output-dir", default=".", help="快照与摘要的落盘目录(容器内传 /data/excel)")
     parser.add_argument("--no-llm-check", action="store_true", help="跳过对假模型的连通性检查")
     args = parser.parse_args()
     rng = random.Random(args.seed)
@@ -385,19 +387,25 @@ def main():
     excel = call(admin, "POST", "/api/admin/excel/snapshot", json={"course_id": course_id})
 
     excel_path = None
+    # 快照按执行环境落盘:目录由 --output-dir 给出(容器内传 /data/excel),默认当前目录。
+    # 先固定根目录,再逐个生成"目录内固定文件名"的目标;写入前校验解析结果未离开根目录。
+    output_root = Path(args.output_dir).resolve()
     try:
-        os.makedirs("/data/excel", exist_ok=True)
+        output_root.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    # 快照按执行环境落盘:容器内优先 /data(即 sim-data 卷),宿主机执行则落当前目录
-    for candidate in ("/data/excel/term_snapshot.xlsx", "sim_term_excel.xlsx"):
+
+    def _safe_target(name):
+        target = (output_root / name).resolve()
+        return target if target.parent == output_root else None
+
+    excel_target = _safe_target("term_snapshot.xlsx")
+    if excel_target:
         try:
-            with open(candidate, "wb") as handle:
-                handle.write(excel.content)
-            excel_path = candidate
-            break
+            excel_target.write_bytes(excel.content)
+            excel_path = str(excel_target)
         except OSError:
-            continue
+            excel_path = None
 
     summary = {
         "generated_at": now_utc().isoformat(),
@@ -412,14 +420,13 @@ def main():
         "students": term_rows,
     }
     summary_path = None
-    for candidate in ("/data/sim_summary.json", "sim_summary.json"):
+    summary_target = _safe_target("sim_summary.json")
+    if summary_target:
         try:
-            with open(candidate, "w", encoding="utf-8") as handle:
-                json.dump(summary, handle, ensure_ascii=False, indent=2)
-            summary_path = candidate
-            break
+            summary_target.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            summary_path = str(summary_target)
         except OSError:
-            continue
+            summary_path = None
 
     total_score = sum(row["score"] for row in term_rows)
     total_max = sum(row["max"] for row in term_rows)
