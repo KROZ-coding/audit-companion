@@ -1,0 +1,234 @@
+# -*- coding: utf-8 -*-
+"""隔离取证 2:其余写接口在"落盘失败一次"后的内存/磁盘行为与重试可达性。
+
+每个场景独立临时 DATA_DIR + 全新 app;注入方式为包装 store.save_async 首次调用返回 False
+(同步端点没有显式保存,这一次就是 persist_state 中间件的那次兜底保存)。
+"""
+import json
+import os
+import sys
+import tempfile
+from contextlib import contextmanager
+from unittest.mock import patch
+
+sys.path.insert(0, r"D:\deepseek harness document\老师那边的智能体9_2\server")
+os.environ["SKIP_ENV_FILE"] = "1"
+os.environ["APP_ENV"] = "development"
+os.environ["KNOWLEDGE_INDEX_PATH"] = "./data/knowledge/__disabled_in_tests__.pkl"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.config import Settings  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.models import PracticeSession  # noqa: E402
+from app.store import Store  # noqa: E402
+
+# 探针专用合成口令:仅对临时目录里的隔离实例使用,不对应任何真实环境凭据
+SEED_STUDENT = "stu123" + "*"
+SEED_TEACHER = "teach123" + "*"
+SEED_ADMIN = "admin123" + "*"
+NEW_STUDENT = "newpass" + "*123"
+ROTATED = "stu45678" + "*"
+
+RESULTS = {}
+
+
+@contextmanager
+def fresh_app():
+    with tempfile.TemporaryDirectory() as data_dir:
+        settings = Settings(app_env="development", data_dir=data_dir, persistence_enabled=True, cookie_secure=False)
+        with patch("app.main.settings", settings):
+            app = create_app()
+            with TestClient(app) as client:
+                yield app, client, data_dir, settings
+
+
+@contextmanager
+def fail_first_save(store):
+    """让中间件的兜底保存(persist_state → save_if_dirty_async)第一次返回 False。
+
+    同步端点没有显式保存,落盘全靠中间件这一次;失败后中间件把端点的 2xx 响应
+    替换成 503,而内存变更已经发生——这正是要取证的场景。
+    """
+    original = store.save_if_dirty_async
+    state = {"failed": False}
+
+    async def fail_once():
+        if not state["failed"]:
+            state["failed"] = True
+            return False
+        return await original()
+
+    with patch.object(store, "save_if_dirty_async", fail_once):
+        yield
+
+
+def code(resp):
+    return resp.status_code
+
+
+def jbody(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return None
+
+
+# ---------- 场景 1:改密码 ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "stu001", "password": SEED_STUDENT})
+    with fail_first_save(app.state.store):
+        changed = client.post("/api/auth/change-password", json={"current_password": SEED_STUDENT, "new_password": ROTATED})
+    me_after = client.get("/api/auth/me").status_code
+    client.post("/api/auth/logout")
+    old_login = client.post("/api/auth/login", json={"username": "stu001", "password": SEED_STUDENT}).status_code
+    new_login = client.post("/api/auth/login", json={"username": "stu001", "password": ROTATED}).status_code
+    client.post("/api/auth/logout")
+    RESULTS["change_password"] = {
+        "first_response": (code(changed), jbody(changed)),
+        "old_session_after_503": me_after,
+        "retry_with_old_password": old_login,
+        "login_with_new_password": new_login,
+        "verdict": "503 后旧会话已被删;界面引导用户用旧密码重试必然 401,但新密码实际已生效(表现为'改密失败却登不上旧密码')",
+    }
+
+# ---------- 场景 2:学生注册 ----------
+with fresh_app() as (app, client, data_dir, settings):
+    payload = {"username": "newstu01", "display_name": "新同学", "student_number": "N001",
+               "password": NEW_STUDENT, "phone": "13800001234", "class_code": "AUD101"}
+    with fail_first_save(app.state.store):
+        reg = client.post("/api/auth/register", json=payload)
+    retry = client.post("/api/auth/register", json=payload)
+    RESULTS["register"] = {
+        "first_response": (code(reg), jbody(reg)),
+        "retry_response": (code(retry), jbody(retry)),
+        "verdict": "503 后待审用户已在内存;学生按提示重试被 409 registration_conflict 挡住,无法重新提交(教师审批列表里能看到该申请)",
+    }
+
+# ---------- 场景 3:入学审批 ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/register", json={
+        "username": "newstu02", "display_name": "审批同学", "student_number": "N002",
+        "password": NEW_STUDENT, "phone": "13800001235", "class_code": "AUD101"})
+    client.post("/api/auth/login", json={"username": "teacher01", "password": SEED_TEACHER})
+    row = next(r for r in client.get("/api/enrollment/pending").json() if r["username"] == "newstu02")
+    with fail_first_save(app.state.store):
+        approve = client.post(f"/api/enrollment/{row['id']}/approve", json={"class_name": "审计二班"})
+    retry = client.post(f"/api/enrollment/{row['id']}/approve", json={"class_name": "审计二班"})
+    pending_after = client.get("/api/enrollment/pending").json()
+    client.post("/api/auth/logout")
+    student_login = client.post("/api/auth/login", json={"username": "newstu02", "password": NEW_STUDENT, "role": "student"}).status_code
+    RESULTS["enrollment_approve"] = {
+        "first_response": (code(approve), jbody(approve)),
+        "retry_response": (code(retry), jbody(retry)),
+        "pending_list_after": len(pending_after),
+        "student_can_login": student_login,
+        "verdict": "审批动作已生效(学生已激活可登录)但教师看到 503;重试 404 registration_not_found,表现为'审批失败却批不了第二次'",
+    }
+
+# ---------- 场景 4:加课/退课 ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "admin", "password": SEED_ADMIN})
+    created = client.post("/api/admin/users", json={
+        "username": "newstu03", "display_name": "插班生", "password": NEW_STUDENT,
+        "role": "student", "student_number": "N003"}).json()
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={"username": "teacher01", "password": SEED_TEACHER})
+    sid = created["id"]
+    with fail_first_save(app.state.store):
+        enroll = client.post(f"/api/courses/audit-101/students/{sid}", json={"class_name": "审计一班"})
+    enroll_retry = client.post(f"/api/courses/audit-101/students/{sid}", json={"class_name": "审计一班"})
+    with fail_first_save(app.state.store):
+        remove = client.delete(f"/api/courses/audit-101/students/{sid}")
+    remove_retry = client.delete(f"/api/courses/audit-101/students/{sid}")
+    RESULTS["enroll_remove_student"] = {
+        "enroll_first": (code(enroll), jbody(enroll)),
+        "enroll_retry": (code(enroll_retry), jbody(enroll_retry)),
+        "remove_first": code(remove),
+        "remove_retry": code(remove_retry),
+        "verdict": "加课 503 后重试 409 already_enrolled;退课 503 后重试 404。动作都已生效,教师界面却报失败",
+    }
+
+# ---------- 场景 5:AI 练习提交(对照已修复的 quiz submit) ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "stu001", "password": SEED_STUDENT})
+    store = app.state.store
+    student = store.find_user_by_username("stu001")
+    session = PracticeSession(
+        id="practice-probe-1", user_id=student.id, course_id="audit-101",
+        questions=[{"id": "pq1", "type": "single_choice", "stem": "练习题", "options": ["A", "B"],
+                    "answer": 0, "reference_answer": "", "rubric": [], "knowledge_points": ["练习点"], "score": 5}],
+    )
+    with store.lock:
+        store.practices[session.id] = session
+    with fail_first_save(store):
+        submit = client.post("/api/practice/practice-probe-1/submit", json={"answers": {"pq1": 0}})
+    submit_retry = client.post("/api/practice/practice-probe-1/submit", json={"answers": {"pq1": 0}})
+    detail = client.get("/api/practice/practice-probe-1")
+    RESULTS["practice_submit"] = {
+        "first_response": (code(submit), jbody(submit)),
+        "retry_response": (code(submit_retry), jbody(submit_retry)),
+        "get_status_after": detail.status_code,
+        "get_body_status": (jbody(detail) or {}).get("status"),
+        "verdict": "与修复前的 quiz submit 同型:503 后练习已判分入内存,重试 409 already_submitted;GET 可见成绩,严重度中等",
+    }
+
+# ---------- 场景 6:删文档(先删文件后落盘) ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "teacher01", "password": SEED_TEACHER})
+    up = client.post("/api/docs/upload", data={"target_kb": "audit_textbook"},
+                     files={"file": ("notes.md", b"# probe notes", "text/markdown")}).json()
+    file_key = f"documents/{up['id']}.md"
+    file_path = os.path.join(data_dir, file_key)
+    existed = os.path.exists(file_path)
+    with fail_first_save(app.state.store):
+        delete = client.delete(f"/api/docs/{up['id']}")
+    file_after = os.path.exists(file_path)
+    reloaded = Store(settings)
+    revived = up["id"] in reloaded.documents
+    RESULTS["delete_document"] = {
+        "file_existed_before": existed,
+        "first_response": code(delete),
+        "file_exists_after_503": file_after,
+        "record_revived_after_reload": revived,
+        "revived_points_to_missing_file": bool(revived and not file_after),
+        "verdict": "503 时文件已物理删除,但磁盘上的记录未删;重启后记录复活且指向已不存在的文件",
+    }
+
+# ---------- 场景 7:删用户 ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "admin", "password": SEED_ADMIN})
+    created = client.post("/api/admin/users", json={
+        "username": "newstu04", "display_name": "待删", "password": NEW_STUDENT,
+        "role": "student", "student_number": "N004"}).json()
+    with fail_first_save(app.state.store):
+        delete = client.delete(f"/api/admin/users/{created['id']}")
+    retry = client.delete(f"/api/admin/users/{created['id']}")
+    reloaded = Store(settings)
+    RESULTS["delete_user"] = {
+        "first_response": code(delete),
+        "retry_response": code(retry),
+        "user_revived_after_reload": created["id"] in reloaded.users,
+        "verdict": "503 后内存已删、磁盘未删;重试 404;重启后该用户复活(与其相关文件清理见 delete_document 场景)",
+    }
+
+# ---------- 场景 8:AI 答疑(503 后已入历史/已计次) ----------
+with fresh_app() as (app, client, data_dir, settings):
+    client.post("/api/auth/login", json={"username": "stu001", "password": SEED_STUDENT})
+    store = app.state.store
+    uid = store.find_user_by_username("stu001").id
+    history_before = len([h for h in store.chat_history if h.get("user_id") == uid])
+    with fail_first_save(store):
+        ask = client.post("/api/chat/ask", json={"question": "什么是审计证据?"})
+    history_after = len([h for h in store.chat_history if h.get("user_id") == uid])
+    usage_tail = [u.get("outcome") for u in store.usage_logs[-3:]]
+    api_history = client.get("/api/chat/history?limit=5").json()
+    RESULTS["chat_ask"] = {
+        "first_response": code(ask),
+        "history_added_despite_503": history_after - history_before,
+        "api_history_first_question": api_history[0].get("question") if api_history else None,
+        "usage_outcomes_tail": usage_tail,
+        "verdict": "回答已生成并入历史、用量已计次,客户端却收到 503;学生重试=重复计费+历史重复入库",
+    }
+
+print(json.dumps(RESULTS, ensure_ascii=False, indent=2, default=str))

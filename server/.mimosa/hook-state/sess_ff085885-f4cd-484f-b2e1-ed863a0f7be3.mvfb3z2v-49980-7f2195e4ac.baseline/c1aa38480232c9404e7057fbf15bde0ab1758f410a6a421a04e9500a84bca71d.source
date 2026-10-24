@@ -1,0 +1,95 @@
+# -*- coding: utf-8 -*-
+"""隔离取证 1:隧道拓扑下 same_origin_writes 失配 403 + 注册 IP 连坐 429。
+
+只读复现:临时 DATA_DIR + TestClient,不触碰真实实例。输出 JSON 供报告引用。
+"""
+import json
+import os
+import sys
+import tempfile
+
+os.environ["SKIP_ENV_FILE"] = "1"
+os.environ["APP_ENV"] = "development"
+os.environ["KNOWLEDGE_INDEX_PATH"] = "./data/knowledge/__disabled_in_tests__.pkl"
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+
+with tempfile.TemporaryDirectory() as data_dir:
+    os.environ["DATA_DIR"] = data_dir
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from unittest.mock import patch
+
+    PUBLIC_ORIGIN = "https://audit-companion.xyz"  # 部署手册中的公网域名形态(占位)
+    settings = Settings(app_env="development", data_dir=data_dir, persistence_enabled=True, cookie_secure=False)
+    with patch("app.main.settings", settings):
+        app = create_app()
+        results = {}
+
+        with TestClient(app) as client:
+            # ---- 对照组:cloudflared 默认保留公网 Host → Origin 与 Host 匹配 → 放行 ----
+            ok_login = client.post(
+                "/api/auth/login",
+                json={"username": "stu001", "password": "stu123*"},
+                headers={"Origin": PUBLIC_ORIGIN, "Host": "audit-companion.xyz"},
+            )
+            results["A_control_host_kept"] = {
+                "desc": "Origin=公网域名 且 Host=公网域名(cloudflared 默认保留 Host)",
+                "status": ok_login.status_code,
+                "verdict": "放行" if ok_login.status_code == 200 else "意外拦截",
+            }
+            client.post("/api/auth/logout")
+
+            # ---- 头号疑点:Host 被改写为 localhost:8000,Origin 仍是公网域名 ----
+            mismatch = client.post(
+                "/api/auth/login",
+                json={"username": "stu001", "password": "stu123*"},
+                headers={"Origin": PUBLIC_ORIGIN, "Host": "localhost:8000"},
+            )
+            results["B_host_rewritten"] = {
+                "desc": "Origin=公网域名 但 Host=localhost:8000(任何一层代理改写 Host)",
+                "status": mismatch.status_code,
+                "body": mismatch.json() if mismatch.status_code != 200 else None,
+                "verdict": "全站写请求 403" if mismatch.status_code == 403 else "未拦截",
+            }
+
+            # 教师发布(对照同条件)
+            mismatch_assign_probe = client.post(
+                "/api/quiz/assign",
+                json={},
+                headers={"Origin": PUBLIC_ORIGIN, "Host": "localhost:8000"},
+            )
+            results["B2_assign_under_mismatch"] = {
+                "desc": "Host 失配下的布置接口(未登录也应 401;若 403 证明在鉴权前就被同源中间件拦截)",
+                "status": mismatch_assign_probe.status_code,
+                "note": "403=同源中间件先于鉴权拦截,即'隧道下发布不了'的直接形态",
+            }
+
+            # ---- 读请求不受影响 ----
+            read_ok = client.get("/health", headers={"Origin": PUBLIC_ORIGIN, "Host": "localhost:8000"})
+            results["C_read_unaffected"] = {"status": read_ok.status_code, "verdict": "读请求不受同源写保护影响"}
+
+            # ---- 边界:无 Origin 的老浏览器/非浏览器客户端 ----
+            no_origin = client.post(
+                "/api/auth/login",
+                json={"username": "stu001", "password": "stu123*"},
+                headers={"Host": "localhost:8000"},
+            )
+            results["D_no_origin_client"] = {
+                "desc": "不发 Origin 的客户端 + Host=localhost",
+                "status": no_origin.status_code,
+                "note": "非 403 说明无 Origin 时放行,误拒只发生在 Origin/Host 失配",
+            }
+
+            # ---- 注册 IP 连坐:隧道下所有请求同一来源,共用限流桶 ----
+            from app.config import Settings as S
+
+            results["E_registration_bucket"] = {
+                "desc": "注册限流按 client.host 计;经隧道人人都是 127.0.0.1 → 全校共桶",
+                "limit_per_hour": S().registration_hourly_limit,
+                "note": "TestClient 逐条打满需多次请求,此处以配置与代码路径佐证(键=client.host)",
+            }
+
+        print(json.dumps(results, ensure_ascii=False, indent=2))

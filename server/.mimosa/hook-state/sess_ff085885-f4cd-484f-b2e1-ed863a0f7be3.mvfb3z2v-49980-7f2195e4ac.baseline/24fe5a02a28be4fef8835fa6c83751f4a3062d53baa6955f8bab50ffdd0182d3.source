@@ -1,0 +1,125 @@
+# -*- coding: utf-8 -*-
+"""隔离取证 3:学期规模下的写请求端到端延迟 + excel 快照锁内拷贝耗时。
+
+合成数据直接注入内存 store(50 生 × 1500 会话 × 10 题 + 1 万条聊天 + 5 千审计),
+临时 DATA_DIR,不触碰真实实例。"""
+import json
+import os
+import sys
+import tempfile
+import time
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+sys.path.insert(0, r"D:\deepseek harness document\老师那边的智能体9_2\server")
+os.environ["SKIP_ENV_FILE"] = "1"
+os.environ["APP_ENV"] = "development"
+os.environ["KNOWLEDGE_INDEX_PATH"] = "./data/knowledge/__disabled_in_tests__.pkl"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.config import Settings  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.models import QuizSession  # noqa: E402
+
+SEED_STUDENT = "stu123" + "*"
+
+
+def build_semester_store(store, students=50, sessions=1500, per_session=10):
+    now = datetime.now(timezone.utc)
+    user_ids = [u.id for u in store.users.values() if u.role == "student"][:students]
+    if len(user_ids) < students:  # 种子不够就补合成学生
+        base = len(user_ids)
+        for i in range(students - base):
+            user_ids.append(f"synthetic-student-{i}")
+    question = {
+        "id": "q1", "type": "single_choice", "stem": "学期合成题干" * 8, "options": ["A", "B", "C", "D"],
+        "answer": 0, "reference_answer": "参考答案" * 20, "rubric": [{"point": "要点", "keywords": ["a", "b"]}],
+        "knowledge_points": ["审计证据", "审计程序", "函证"], "score": 5,
+    }
+    for s in range(sessions):
+        sid = f"synthetic-session-{s}"
+        uid = user_ids[s % len(user_ids)]
+        sess = QuizSession(
+            id=sid, user_id=uid, course_id="audit-101",
+            questions=[dict(question, id=f"q{i}") for i in range(per_session)],
+            status="graded", started_at=now - timedelta(days=90 - s % 90),
+            submitted_at=now - timedelta(days=89 - s % 90),
+        )
+        store.quiz_sessions[sid] = sess
+        store.results[f"result-{s}"] = type(store.results.get(next(iter(store.results), "x"), None) or store.results.__class__ and None)  # placeholder
+    # results 用轻量合成对象替换上面的占位
+    from app.models import GradingResult
+    store.results = {
+        f"result-{s}": GradingResult(
+            id=f"result-{s}", session_id=f"synthetic-session-{s}",
+            per_question=[{"question_id": f"q{i}", "score": 3, "max_score": 5, "method": "rule",
+                           "why": "批改意见" * 10, "knowledge_points": ["审计证据", "函证"], "per_point": []}
+                          for i in range(per_session)],
+            total=30, max_total=50, status="graded",
+            submitted_answers={f"q{i}": i % 4 for i in range(per_session)},
+        ) for s in range(sessions)
+    }
+    uid0 = store.find_user_by_username("stu001").id
+    store.chat_history = [
+        {"id": f"chat-{i}", "user_id": uid0, "course_id": "audit-101",
+         "question": "问题" * 40, "answer": {"answer_markdown": "回答" * 200},
+         "created_at": now.isoformat()}
+        for i in range(10000)
+    ]
+    store.audit_logs = [
+        {"id": i, "at": now.isoformat(), "actor_id": uid0, "action": "synthetic", "detail": {"k": "v" * 50}, "ip": None}
+        for i in range(5000)
+    ]
+
+
+with tempfile.TemporaryDirectory() as data_dir:
+    settings = Settings(app_env="development", data_dir=data_dir, persistence_enabled=True, cookie_secure=False)
+    with patch("app.main.settings", settings):
+        app = create_app()
+        store = app.state.store
+        with TestClient(app) as client:
+            client.post("/api/auth/login", json={"username": "stu001", "password": SEED_STUDENT})
+            quiz = client.post("/api/quiz/start", json={
+                "course_id": "audit-101",
+                "counts": {"single": 1, "multi": 0, "judge": 0, "fill": 0, "short": 0, "case": 0}}).json()
+
+            # 基线:空库时的草稿保存耗时
+            t0 = time.perf_counter()
+            r0 = client.post(f"/api/quiz/{quiz['id']}/draft", json={"answers": {quiz["questions"][0]["id"]: 0}})
+            small_ms = (time.perf_counter() - t0) * 1000
+
+            # 注入学期规模合成数据
+            build_semester_store(store)
+            state_json_mb = len(json.dumps(store._snapshot(), default=str, ensure_ascii=False)) / 1e6
+
+            # 学期规模下的同请求耗时(中间件等待全量落盘)
+            t1 = time.perf_counter()
+            r1 = client.post(f"/api/quiz/{quiz['id']}/draft", json={"answers": {quiz["questions"][0]["id"]: 1}})
+            big_ms = (time.perf_counter() - t1) * 1000
+
+            # excel 快照路径的锁内 deepcopy 耗时(按 excel_export workbook_bytes 的拷贝范围模拟)
+            allowed = {"audit-101"}
+            t2 = time.perf_counter()
+            with store.lock:
+                enrollments = deepcopy({k: v for k, v in store.enrollments.items() if k[0] in allowed})
+                users = deepcopy(store.users)
+                sessions_copy = deepcopy([s for s in store.quiz_sessions.values() if s.course_id in allowed])
+                session_ids = {s.id for s in sessions_copy}
+                results_copy = deepcopy([r for r in store.results.values() if r.session_id in session_ids])
+                chats = deepcopy([c for c in store.chat_history if c.get("course_id") in allowed])
+            copy_ms = (time.perf_counter() - t2) * 1000
+
+            # 磁盘落盘体积
+            blob_mb = os.path.getsize(os.path.join(data_dir, "store.sqlite3")) / 1e6
+
+            print(json.dumps({
+                "draft_save_small_store_ms": round(small_ms),
+                "draft_save_semester_store_ms": round(big_ms),
+                "semester_state_json_mb": round(state_json_mb, 1),
+                "sqlite_file_mb": round(blob_mb, 1),
+                "excel_snapshot_locked_deepcopy_ms": round(copy_ms),
+                "draft_responses": [r0.status_code, r1.status_code],
+                "note": "写请求延迟含中间件等待全量落盘;50 生规模 1500 已交卷会话即达此量级,继续增长线性恶化",
+            }, ensure_ascii=False, indent=2))

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-10-24T11:00:42.242Z",
+  "sessionId": "sess_ff085885-f4cd-484f-b2e1-ed863a0f7be3",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "C:/Users/ASUS/AppData/Local/Temp/deep-audit/probe3_perf.py",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 15,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}
