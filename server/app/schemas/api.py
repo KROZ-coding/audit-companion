@@ -255,6 +255,7 @@ class StudentGradingResultOut(BaseModel):
     max_total: float
     graded_by: str
     per_question: list[StudentGradeItem]
+    submitted_answers: dict[str, Any] = Field(default_factory=dict)
 
 
 class QuizSubmitResponse(BaseModel):
@@ -343,6 +344,7 @@ class QuizAssignRequest(BaseModel):
     student_ids: list[str] | None = None
     class_name: str | None = Field(default=None, max_length=100)
     due_at: datetime | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class AiInsightRequest(BaseModel):

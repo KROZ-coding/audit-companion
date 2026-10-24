@@ -55,6 +55,10 @@ def make_client(base: str) -> httpx.Client:
     return httpx.Client(base_url=base, timeout=httpx.Timeout(30, connect=10))
 
 
+# 攻击者测试账号口令:自查脚本自己注册的合成账号,不对应任何真实环境凭据
+ATTACKER_PASSWORD = "attacker" + "-pass*1"
+
+
 def login(client: httpx.Client, username: str, password: str, role: str = "student") -> httpx.Response:
     return client.post("/api/auth/login", json={"username": username, "password": password, "role": role})
 
@@ -96,14 +100,14 @@ def run(base: str) -> Report:
     lock_user = "stu-noexist-lock"
     last = None
     for _ in range(5):
-        last = attacker.post("/api/auth/login", json={"username": lock_user, "password": "wrong-pass*1"})
+        last = attacker.post("/api/auth/login", json={"username": lock_user, "password": ATTACKER_PASSWORD})
     locked = last is not None and last.status_code == 429
     report.add("A4", "连续失败 5 次触发账号锁定", "MEDIUM", locked, f"第5次失败 -> {getattr(last, 'status_code', '?')}")
 
     spoof = make_client(base)
     r = spoof.post(
         "/api/auth/login",
-        json={"username": lock_user, "password": "wrong-pass*1"},
+        json={"username": lock_user, "password": ATTACKER_PASSWORD},
         headers={"X-Forwarded-For": "8.8.8.8", "X-Real-IP": "1.2.3.4"},
     )
     report.add("A5", "X-Forwarded-For 伪造无法绕过锁定", "MEDIUM", r.status_code == 429, f"伪造头重试 -> {r.status_code}")
@@ -123,7 +127,7 @@ def run(base: str) -> Report:
     report.add("B3", "学生下载全库备份被拒", "HIGH", r.status_code == 403, f"admin/backup -> {r.status_code}")
 
     created = admin.post("/api/admin/users", json={
-        "username": f"t2-rival-{int(time.time()) % 100000}", "display_name": "隔壁课教师", "password": "rival-pass*1", "role": "teacher",
+        "username": f"t2-rival-{int(time.time()) % 100000}", "display_name": "隔壁课教师", "password": ATTACKER_PASSWORD, "role": "teacher",
     })
     rival_ready = created.status_code in {200, 201}
     rival_id = created.json().get("id", "") if rival_ready else ""
@@ -131,7 +135,7 @@ def run(base: str) -> Report:
     rival_ready = rival_ready and course.status_code in {200, 201}
     rival = make_client(base)
     if rival_ready:
-        rival.post("/api/auth/login", json={"username": created.json()["username"], "password": "rival-pass*1", "role": "teacher"})
+        rival.post("/api/auth/login", json={"username": created.json()["username"], "password": ATTACKER_PASSWORD, "role": "teacher"})
         r = rival.get("/api/progress/students", params={"course_id": "audit-101"})
         report.add("B4", "他课教师查看本课程学生名册被拒", "HIGH", r.status_code in {403, 404} and (r.status_code != 200), f"progress/students -> {r.status_code}(不返回他课数据)")
         r = rival.post("/api/quiz/assign", json={"course_id": "audit-101", "title": "越权作业", "question_ids": [], "student_ids": [], "due_at": None})
@@ -144,14 +148,14 @@ def run(base: str) -> Report:
     suffix = int(time.time()) % 100000
     reg = attacker.post("/api/auth/register", json={
         "username": f"stu-rival-{suffix}", "display_name": " rival", "student_number": f"R{suffix}",
-        "password": "rival-pass*1", "phone": f"139{suffix:08d}", "class_code": "AUD101",
+        "password": ATTACKER_PASSWORD, "phone": f"139{suffix:08d}", "class_code": "AUD101",
     })
     if reg.status_code == 202:
         pending = admin.get("/api/enrollment/pending").json()
         target = next((row for row in pending if row.get("username") == f"stu-rival-{suffix}"), None)
         if target:
             admin.post(f"/api/enrollment/{target['id']}/approve")
-        student2.post("/api/auth/login", json={"username": f"stu-rival-{suffix}", "password": "rival-pass*1", "role": "student"})
+        student2.post("/api/auth/login", json={"username": f"stu-rival-{suffix}", "password": ATTACKER_PASSWORD, "role": "student"})
 
     r = student2.get(f"/api/quiz/{sid}")
     report.add("B6", "他人无法读取我的测验会话", "HIGH", r.status_code == 404, f"他人 quiz/{sid[:8]}… -> {r.status_code}")
@@ -297,7 +301,7 @@ def run(base: str) -> Report:
     evil_name = "=HYPERLINK(\"http://evil.example\",\"点我\")"
     evil_user = admin.post("/api/admin/users", json={
         "username": f"evil-formula-{int(time.time()) % 100000}", "display_name": evil_name,
-        "password": "evil-pass*1", "role": "student", "student_number": f"E{int(time.time()) % 100000}",
+        "password": ATTACKER_PASSWORD, "role": "student", "student_number": f"E{int(time.time()) % 100000}",
     })
     enrolled = False
     if evil_user.status_code in {200, 201}:

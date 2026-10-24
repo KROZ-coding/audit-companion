@@ -416,6 +416,19 @@ class Store:
                 self._dirty += 1
             return False
 
+    def mark_dirty(self) -> None:
+        """显式标记内存已变更;端点内未调用 save 时由写请求中间件统一落盘。"""
+        with self.lock:
+            self._dirty += 1
+
+    def discard_audit(self, entry: dict[str, Any]) -> None:
+        """撤销一次未提交事务写入的审计条目(按对象身份,不影响并发请求的日志)。"""
+        with self.lock:
+            try:
+                self.audit_logs.remove(entry)
+            except ValueError:
+                pass
+
     async def save_async(self) -> bool:
         if not self.persistence_enabled:
             return True
@@ -937,21 +950,24 @@ class Store:
         actor_id: str | None,
         detail: dict[str, Any] | None = None,
         ip: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
+        """追加一条业务日志并返回该条目;调用方可在事务回滚时按对象身份精确移除。"""
         with self.lock:
             self._dirty += 1  # 每条业务日志伴随一次状态变更;save() 成功后清零,供写请求去重
-            self.audit_logs.append({
+            entry = {
                 "id": len(self.audit_logs) + 1,
                 "at": datetime.now(timezone.utc).isoformat(),
                 "actor_id": actor_id,
                 "action": action,
                 "detail": detail or {},
                 "ip": ip,
-            })
+            }
+            self.audit_logs.append(entry)
             # 保留最近 N 条,防止内存无限增长
             max_logs = self.settings.log_max_entries
             if len(self.audit_logs) > max_logs:
                 self.audit_logs[:] = self.audit_logs[-max_logs:]
+            return entry
 
     def record_usage(
         self,

@@ -83,7 +83,7 @@ def submitted_answers(result_id: str, user: User = Depends(require_roles("teache
 
 
 @router.post("/{result_id}/review", response_model=GradingResultOut)
-def review(result_id: str, payload: ReviewGradeRequest, user: User = Depends(require_roles("teacher", "admin")), store: Store = Depends(get_store)) -> GradingResultOut:
+async def review(result_id: str, payload: ReviewGradeRequest, user: User = Depends(require_roles("teacher", "admin")), store: Store = Depends(get_store)) -> GradingResultOut:
     result = store.results.get(result_id)
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "grading_not_found", "message": "批改结果不存在"})
@@ -98,7 +98,7 @@ def review(result_id: str, payload: ReviewGradeRequest, user: User = Depends(req
             raise HTTPException(status_code=409, detail={"code": "no_review_needed", "message": "没有待复核的主观题"})
         if payload.score > pending["max_score"]:
             raise HTTPException(status_code=422, detail={"code": "score_exceeds_max", "message": "得分不能超过题目满分"})
-        previous_score = pending["score"]
+        previous = (pending["score"], pending["method"], pending["why"], result.total, result.status, result.graded_by, result.graded_at, session.status)
         pending["score"] = payload.score
         pending["method"] = "teacher"
         pending["why"] = payload.reason
@@ -108,11 +108,23 @@ def review(result_id: str, payload: ReviewGradeRequest, user: User = Depends(req
         result.graded_at = datetime.now(timezone.utc)
         session.status = result.status
         store.rebuild_mastery()
-    store.audit("grading_review", user.id, {
+    audit_entry = store.audit("grading_review", user.id, {
         "result_id": result_id, "session_id": session.id, "student_id": session.user_id,
         "course_id": session.course_id, "question_id": payload.question_id,
-        "previous_score": previous_score, "new_score": payload.score, "reason": payload.reason,
+        "previous_score": previous[0], "new_score": payload.score, "reason": payload.reason,
     })
+    # 复核结果同样显式落盘:保存失败时把复核改动整体撤销,教师重试不能再被 409 挡住。
+    if not await store.save_async():
+        with store.lock:
+            pending["score"], pending["method"], pending["why"], result.total, result.status, result.graded_by, result.graded_at, session.status = previous
+            # pending 恢复为 manual_pending 后按现存结果重算,掌握度与报告缓存自然回到复核前状态。
+            store.rebuild_mastery()
+            store.discard_audit(audit_entry)
+            store.mark_dirty()
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "persistence_failed", "message": "复核结果暂未可靠保存，请稍后重试"},
+        )
     return grading_out(result)
 
 

@@ -47,4 +47,6 @@ def student_grading_out(result: GradingResult) -> StudentGradingResultOut:
             )
             for item in result.per_question
         ],
+        # 学生回看完整结果时不再依赖提交页面的局部答案对象。
+        submitted_answers=dict(result.submitted_answers),
     )

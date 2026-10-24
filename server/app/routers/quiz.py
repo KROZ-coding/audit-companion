@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from copy import deepcopy
+import json
 import random
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -139,7 +140,7 @@ def start(payload: QuizStartRequest, user: User = Depends(get_current_user), sto
 
 
 @router.post("/assign")
-def assign_quiz(
+async def assign_quiz(
     payload: QuizAssignRequest,
     user: User = Depends(require_roles("teacher", "admin")),
     store: Store = Depends(get_store),
@@ -149,6 +150,31 @@ def assign_quiz(
         raise HTTPException(status_code=404, detail={"code": "course_not_found", "message": "课程不存在"})
     if not store.can_access_course(user, payload.course_id, teaching=True):
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权在该课程组卷"})
+    if payload.idempotency_key:
+        fingerprint = _assign_fingerprint(payload)
+        with store.lock:
+            replay = next(
+                (
+                    item for item in store.assignments.values()
+                    if item.get("idempotency_key") == payload.idempotency_key
+                    and item.get("created_by") == user.id
+                    and item.get("course_id") == payload.course_id
+                ),
+                None,
+            )
+        if replay is not None:
+            if replay.get("idempotency_fingerprint") != fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "idempotency_key_reused", "message": "该幂等键已用于另一次布置，请重新提交"},
+                )
+            return {
+                "status": "assigned", "title": replay["title"],
+                "assignment_id": replay["id"], "question_count": replay["question_count"],
+                "student_count": len(replay.get("student_ids", [])),
+                "session_ids": list(replay.get("session_ids", [])),
+                "idempotent_replay": True,
+            }
     questions = []
     for qid in payload.question_ids:
         q = store.questions.get(qid)
@@ -200,12 +226,27 @@ def assign_quiz(
             "question_count": len(questions),
             "student_ids": [item.id for item in students],
             "session_ids": session_ids,
+            "idempotency_key": payload.idempotency_key,
+            "idempotency_fingerprint": fingerprint if payload.idempotency_key else None,
         }
-    store.audit("quiz_assign", user.id, {
+    audit_entry = store.audit("quiz_assign", user.id, {
         "course_id": payload.course_id, "title": payload.title,
         "question_count": len(questions), "student_count": len(students),
         "session_ids": session_ids,
     })
+    # 布置与落盘作为一个整体:失败时撤销内存变更,避免“接口报错但学生已能看到作业”。
+    if not await store.save_async():
+        with store.lock:
+            for session_id in session_ids:
+                session = store.quiz_sessions.pop(session_id, None)
+                if session is not None:
+                    store._deindex_session_locked(session)
+            store.assignments.pop(assignment_id, None)
+            _remove_audit_entry(store, audit_entry)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "persistence_failed", "message": "业务数据暂未可靠保存，请联系管理员"},
+        )
     return {
         "status": "assigned", "title": payload.title,
         "assignment_id": assignment_id,
@@ -284,6 +325,7 @@ def list_assignments(
 ) -> list[dict]:
     if course_id is not None and not store.can_access_course(user, course_id):
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "无权查看该课程试卷"})
+    results_by_session = {item.session_id: item.id for item in store.results.values()}
     sessions = sorted(
         (
             session for session in store.quiz_sessions.values()
@@ -303,6 +345,8 @@ def list_assignments(
             "due_at": store.assignments.get(session.assignment_id, {}).get("due_at"),
             "started_at": session.started_at.isoformat(),
             "submitted_at": session.submitted_at.isoformat() if session.submitted_at else None,
+            # 已提交测验的结果入口:前端据此显示“查看结果”并调用按 session_id 的查询接口。
+            "result_id": results_by_session.get(session.id),
         }
         for session in sessions
     ]
@@ -382,6 +426,44 @@ def _iso_optional(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _remove_audit_entry(store: Store, entry: dict) -> None:
+    """按对象身份撤销本次事务写入的审计条目,不影响并发请求的日志。"""
+    store.discard_audit(entry)
+
+
+def _assign_fingerprint(payload: QuizAssignRequest) -> str:
+    """幂等键必须绑定请求内容:同一把键换了题目/学生/截止时间时不能复用旧作业。"""
+    return json.dumps(
+        {
+            "title": payload.title,
+            "question_ids": sorted(payload.question_ids),
+            "student_ids": sorted(payload.student_ids) if payload.student_ids is not None else None,
+            "class_name": payload.class_name,
+            "due_at": payload.due_at.isoformat() if payload.due_at else None,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _restore_after_grading_failure(
+    store: Store, session: QuizSession, submitted: dict, previous_answers: dict,
+) -> None:
+    """批改失败后回到可作答状态,并把本次提交内容保留为草稿。
+
+    只把状态改回 ongoing 而继续保留 submitted_answers 会让恢复接口继续优先返回
+    旧提交,学生随后保存的新草稿会被遮蔽。
+    """
+    with store.lock:
+        session.status = "ongoing"
+        session.submitted_at = None
+        session.submitted_answers = dict(previous_answers)
+        session.draft_answers = dict(submitted)
+        session.draft_updated_at = datetime.now(timezone.utc)
+        # 状态已回退且草稿有变,必须重新标记脏数据,否则中间件会跳过落盘。
+        store.mark_dirty()
+
+
 @router.post("/{session_id}/submit", response_model=None)
 async def submit(
     session_id: str, payload: QuizSubmitRequest,
@@ -412,14 +494,10 @@ async def submit(
     except asyncio.CancelledError:
         # 请求被取消(客户端断开/超时)时同样要把会话从 grading 恢复为 ongoing,
         # 否则在进程重启的启动恢复之前,学生会话一直卡在"批改中"。
-        with store.lock:
-            session.status = "ongoing"
-            session.submitted_at = None
+        _restore_after_grading_failure(store, session, payload.answers, previous_answers)
         raise
     except Exception as error:
-        with store.lock:
-            session.status = "ongoing"
-            session.submitted_at = None
+        _restore_after_grading_failure(store, session, payload.answers, previous_answers)
         raise HTTPException(status_code=503, detail={"code": "grading_failed", "message": "批改暂时失败，请重新提交"}) from error
     with store.lock:
         apply_grading_result(store, session, result)
@@ -428,6 +506,23 @@ async def submit(
         session.draft_updated_at = None
         store.results[result.id] = result
     store.audit("quiz_submit", user.id, {"session_id": session.id, "result_id": result.id})
+    # 批改结果也要显式落盘:保存失败时回到可重试状态,避免学生看到失败却无法重交。
+    if not await store.save_async():
+        with store.lock:
+            store.results.pop(result.id, None)
+            session.status = "ongoing"
+            session.submitted_at = None
+            session.submitted_answers = dict(payload.answers)
+            session.draft_answers = dict(payload.answers)
+            session.draft_updated_at = datetime.now(timezone.utc)
+            # apply_grading_result 已按知识点累加掌握度;结果移除后全量重算即恢复提交前状态,
+            # 否则“失败 503 后重试”会把同一次作答在 EMA 里计两次。
+            store.rebuild_mastery()
+            store.mark_dirty()
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "persistence_failed", "message": "批改结果暂未可靠保存，请稍后重新提交"},
+        )
     if user.role == "student":
         return StudentQuizSubmitResponse(status=result.status, session_id=session.id, result=student_grading_out(result))
     return QuizSubmitResponse(status=result.status, session_id=session.id, result=grading_out(result))

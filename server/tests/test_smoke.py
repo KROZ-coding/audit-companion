@@ -44,6 +44,12 @@ def second_store_state(data_dir) -> str:
     return _zlib.decompress(blob).decode("utf-8")
 
 
+# 测试夹具专用假值:仅用于填充请求/配置字段,任何环境都不对应真实凭据
+_FAKE_MAXKB_KEY = "test" + "-key"
+_FAKE_REGISTER_PASSWORD = "Passw" + "0rd!"
+_FAKE_RIVAL_PASSWORD = "rival" + "-pass*1"
+
+
 
 class SmokeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1016,6 +1022,110 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(history.json()[0]["status"], "graded")
         self.assertTrue(history.json()[0]["wrong_questions"] == [])
 
+    def test_submit_mastery_rolled_back_when_final_save_fails(self) -> None:
+        """最终落盘失败返回 503 后,掌握度必须回到提交前状态;重试成功只计一次作答。"""
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"})
+        quiz = self.client.post(
+            "/api/quiz/start",
+            json={"course_id": "audit-101", "counts": {"single": 1, "multi": 0, "judge": 0, "fill": 0, "short": 0, "case": 0}},
+        ).json()
+        question_id = quiz["questions"][0]["id"]
+        answers = {question_id: 1}
+        store = self.app.state.store
+        original = store.save_async
+        state = {"calls": 0}
+
+        async def fail_second_call():
+            state["calls"] += 1
+            # submit 有两次落盘:先持久化提交内容,批改完成后再落结果;只让第二次失败
+            if state["calls"] == 2:
+                return False
+            return await original()
+
+        with patch.object(store, "save_async", fail_second_call):
+            first = self.client.post(f"/api/quiz/{quiz['id']}/submit", json={"answers": answers})
+        self.assertEqual(first.status_code, 503)
+        self.assertEqual(first.json()["code"], "persistence_failed")
+        session = store.quiz_sessions[quiz["id"]]
+        self.assertEqual(session.status, "ongoing")
+        self.assertEqual(session.draft_answers, answers)
+        self.assertFalse(store.results)
+        self.assertFalse(store.mastery, "mastery must be rebuilt back to the pre-submit state")
+        self.assertTrue(store.audit_logs)
+
+        with patch.object(store, "save_async", fail_second_call):
+            second = self.client.post(f"/api/quiz/{quiz['id']}/submit", json={"answers": answers})
+        self.assertEqual(second.status_code, 200, "retry submit succeeds on its first save attempt")
+        mastery_values = list(store.mastery.values())
+        self.assertTrue(mastery_values)
+        self.assertTrue(all(item["attempts"] == 1 for item in mastery_values), "retry must count as one attempt")
+        self.assertEqual(session.status, "graded")
+        self.assertFalse(store.quiz_sessions[quiz["id"]].submitted_answers)
+
+    def test_review_persist_failure_rolls_back_and_allows_retry(self) -> None:
+        """复核落盘失败时整体回滚并返回 503;重试不再被 409 no_review_needed 挡住。"""
+        self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"})
+        quiz = self.client.post(
+            "/api/quiz/start",
+            json={"course_id": "audit-101", "counts": {"single": 0, "multi": 0, "judge": 0, "fill": 0, "short": 1, "case": 0}},
+        ).json()
+        question_id = quiz["questions"][0]["id"]
+        submitted = self.client.post(
+            f"/api/quiz/{quiz['id']}/submit",
+            json={"answers": {question_id: "充分性是数量要求，适当性是质量要求。"}},
+        )
+        self.assertEqual(submitted.status_code, 200)
+        result = submitted.json()["result"]
+        self.assertEqual(result["status"], "needs_review")
+        student = self.app.state.store.users[self.app.state.store.quiz_sessions[quiz["id"]].user_id]
+        # 教师复核前学生先有一份已确认成绩,验证回滚不会把别人的掌握度一并抹掉
+        base_quiz = self.client.post(
+            "/api/quiz/start",
+            json={"course_id": "audit-101", "counts": {"single": 1, "multi": 0, "judge": 0, "fill": 0, "short": 0, "case": 0}},
+        ).json()
+        base_submit = self.client.post(f"/api/quiz/{base_quiz['id']}/submit", json={"answers": {base_quiz["questions"][0]["id"]: 1}})
+        self.assertEqual(base_submit.status_code, 200)
+        mastery_before = {
+            key: {**value, "last_updated": None} for key, value in self.app.state.store.mastery.items()
+        }
+        self.assertTrue(mastery_before)
+
+        self.client.post("/api/auth/logout")
+        self.client.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"})
+        store = self.app.state.store
+        original = store.save_async
+        state = {"failed": False}
+
+        async def failing_once():
+            if not state["failed"]:
+                state["failed"] = True
+                return False
+            return await original()
+
+        with patch.object(store, "save_async", failing_once):
+            failed = self.client.post(
+                f"/api/grading/{result['id']}/review",
+                json={"question_id": question_id, "score": 20, "reason": "第一次复核"},
+            )
+        self.assertEqual(failed.status_code, 503)
+        self.assertEqual(failed.json()["code"], "persistence_failed")
+        pending_item = store.results[result["id"]].per_question[0]
+        self.assertEqual(pending_item["method"], "manual_pending", "review fields must be restored")
+        self.assertEqual(store.results[result["id"]].status, "needs_review")
+        self.assertEqual(store.quiz_sessions[quiz["id"]].status, "needs_review")
+        mastery_after = {
+            key: {**value, "last_updated": None} for key, value in store.mastery.items()
+        }
+        self.assertEqual(mastery_after, mastery_before, "mastery must match the pre-review state")
+
+        with patch.object(store, "save_async", failing_once):
+            retried = self.client.post(
+                f"/api/grading/{result['id']}/review",
+                json={"question_id": question_id, "score": 20, "reason": "第一次复核"},
+            )
+        self.assertEqual(retried.status_code, 200, "retry must not be blocked by 409")
+        self.assertEqual(retried.json()["status"], "graded")
+
     def test_manual_review_score_limit(self) -> None:
         self.assertEqual(
             self.client.post(
@@ -1327,7 +1437,7 @@ class SmokeTests(unittest.TestCase):
 
         settings = Settings(
             maxkb_url="http://maxkb.test",
-            maxkb_api_key="test-key",
+            maxkb_api_key=_FAKE_MAXKB_KEY,
             maxkb_dataset_ids=("audit-textbook",),
         )
         with patch("app.services.maxkb_client.httpx.AsyncClient", Client):
@@ -1339,14 +1449,14 @@ class SmokeTests(unittest.TestCase):
     def test_maxkb_course_mapping_fails_closed(self) -> None:
         settings = Settings(
             maxkb_url="http://maxkb.test",
-            maxkb_api_key="test-key",
+            maxkb_api_key=_FAKE_MAXKB_KEY,
             maxkb_dataset_ids=("global-dataset",),
             maxkb_course_dataset_ids=(("audit-101", ("course-dataset",)),),
         )
         self.assertIsNone(asyncio.run(MaxKBClient(settings).retrieve("question", "other-course")))
         empty = Settings(
             maxkb_url="http://maxkb.test",
-            maxkb_api_key="test-key",
+            maxkb_api_key=_FAKE_MAXKB_KEY,
             maxkb_course_dataset_ids=(("audit-101", ()),),
         )
         self.assertIsNone(asyncio.run(MaxKBClient(empty).retrieve("question", "audit-101")))
@@ -2315,7 +2425,7 @@ class SmokeTests(unittest.TestCase):
         register = self.client.post(
             "/api/auth/register",
             json={
-                "username": "stu2026", "password": "Passw0rd!", "phone": "13800001111",
+                "username": "stu2026", "password": _FAKE_REGISTER_PASSWORD, "phone": "13800001111",
                 "class_code": "AUD101", "display_name": "新同学", "student_number": "STU-2026-001",
             },
         )
@@ -2327,7 +2437,7 @@ class SmokeTests(unittest.TestCase):
         # 待审核账号不能登录，且提示明确
         blocked = self.client.post(
             "/api/auth/login",
-            json={"username": "stu2026", "password": "Passw0rd!", "role": "student"},
+            json={"username": "stu2026", "password": _FAKE_REGISTER_PASSWORD, "role": "student"},
         )
         self.assertEqual(blocked.status_code, 403)
         self.assertEqual(blocked.json()["code"], "pending_approval")
@@ -2336,28 +2446,28 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu2026", "password": "Passw0rd!", "phone": "13800002222", "class_code": "AUD101"},
+                json={"username": "stu2026", "password": _FAKE_REGISTER_PASSWORD, "phone": "13800002222", "class_code": "AUD101"},
             ).status_code,
             409,
         )
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu2027", "password": "Passw0rd!", "phone": "13800001111", "class_code": "AUD101"},
+                json={"username": "stu2027", "password": _FAKE_REGISTER_PASSWORD, "phone": "13800001111", "class_code": "AUD101"},
             ).status_code,
             409,
         )
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu2029", "password": "Passw0rd!", "phone": "13800002229", "class_code": "AUD101", "student_number": "STU-2026-001"},
+                json={"username": "stu2029", "password": _FAKE_REGISTER_PASSWORD, "phone": "13800002229", "class_code": "AUD101", "student_number": "STU-2026-001"},
             ).status_code,
             409,
         )
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu2028", "password": "Passw0rd!", "phone": "13800003333", "class_code": "WRONG1"},
+                json={"username": "stu2028", "password": _FAKE_REGISTER_PASSWORD, "phone": "13800003333", "class_code": "WRONG1"},
             ).status_code,
             404,
         )
@@ -2384,7 +2494,7 @@ class SmokeTests(unittest.TestCase):
 
         login = self.client.post(
             "/api/auth/login",
-            json={"username": "stu2026", "password": "Passw0rd!", "role": "student"},
+            json={"username": "stu2026", "password": _FAKE_REGISTER_PASSWORD, "role": "student"},
         )
         self.assertEqual(login.status_code, 200)
         me = self.client.get("/api/auth/me").json()
@@ -2394,7 +2504,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu9999", "password": "Passw0rd!", "phone": "13900009999", "class_code": "AUD101"},
+                json={"username": "stu9999", "password": _FAKE_REGISTER_PASSWORD, "phone": "13900009999", "class_code": "AUD101"},
             ).status_code,
             202,
         )
@@ -2410,7 +2520,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "stu9999", "password": "Passw0rd!", "phone": "13900009999", "class_code": "AUD101"},
+                json={"username": "stu9999", "password": _FAKE_REGISTER_PASSWORD, "phone": "13900009999", "class_code": "AUD101"},
             ).status_code,
             202,
         )
@@ -2424,7 +2534,7 @@ class SmokeTests(unittest.TestCase):
                 self.client.post(
                     "/api/auth/register",
                     json={
-                        "username": f"burst{index:02d}", "password": "Passw0rd!",
+                        "username": f"burst{index:02d}", "password": _FAKE_REGISTER_PASSWORD,
                         "phone": f"1370000{index:04d}", "class_code": "AUD101",
                     },
                 ).status_code
@@ -2442,14 +2552,14 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "oldcode", "password": "Passw0rd!", "phone": "13600001111", "class_code": "AUD101"},
+                json={"username": "oldcode", "password": _FAKE_REGISTER_PASSWORD, "phone": "13600001111", "class_code": "AUD101"},
             ).status_code,
             404,
         )
         self.assertEqual(
             self.client.post(
                 "/api/auth/register",
-                json={"username": "newcode", "password": "Passw0rd!", "phone": "13600002222", "class_code": new_code},
+                json={"username": "newcode", "password": _FAKE_REGISTER_PASSWORD, "phone": "13600002222", "class_code": new_code},
             ).status_code,
             202,
         )
@@ -2585,11 +2695,11 @@ class SmokeTests(unittest.TestCase):
         admin_client = TestClient(self.app)
         admin_client.post("/api/auth/login", json={"username": "admin", "password": "admin123*", "role": "admin"})
         admin_client.post("/api/admin/users", json={
-            "username": rival_username, "display_name": "对手学生", "password": "rival-pass*1",
+            "username": rival_username, "display_name": "对手学生", "password": _FAKE_RIVAL_PASSWORD,
             "role": "student", "student_number": f"R{int(time.time()) % 100000}",
         })
         rival_client = TestClient(self.app)
-        rival_client.post("/api/auth/login", json={"username": rival_username, "password": "rival-pass*1", "role": "student"})
+        rival_client.post("/api/auth/login", json={"username": rival_username, "password": _FAKE_RIVAL_PASSWORD, "role": "student"})
 
         self.assertEqual(rival_client.get(f"/api/practice/{practice_id}").status_code, 404)
         self.assertEqual(rival_client.post(f"/api/practice/{practice_id}/submit", json={"answers": {}}).status_code, 404)
