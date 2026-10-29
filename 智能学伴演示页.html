@@ -1975,6 +1975,11 @@ let LIVE_COURSE_ID=null;
 let LIVE_ASSIGNMENTS=[];
 /* 视图代次:每次新试卷/列表上屏加一,异步响应回来时比对,防迟到响应污染当前作答 */
 let QUIZ_VIEW_EPOCH=0;
+async function beginQuizViewLoad(){
+  const viewEpoch=++QUIZ_VIEW_EPOCH;
+  await flushDraft();
+  return viewEpoch===QUIZ_VIEW_EPOCH?viewEpoch:null;
+}
 async function ensureCourseId(){
   if(LIVE_COURSE_ID)return LIVE_COURSE_ID;
   const courses=await apiRequest('/api/courses');
@@ -2035,9 +2040,8 @@ function renderQuizSession(data){
 }
 async function openAssignedQuiz(id){
   const area=document.getElementById('quizArea');if(!area)return;
-  await flushDraft();
-  /* 请求前取代次:响应回来时若用户已点开别的试卷,丢弃本次响应,防止 A 晚到覆盖 B */
-  const viewEpoch=QUIZ_VIEW_EPOCH;
+  const viewEpoch=await beginQuizViewLoad();
+  if(viewEpoch===null)return;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
   try{
     const data=await apiRequest(`/api/quiz/${encodeURIComponent(id)}`);
@@ -2075,8 +2079,8 @@ async function openQuizResult(id){
 }
 async function startRandomQuiz(){
   const area=document.getElementById('quizArea');if(!area)return;
-  await flushDraft();
-  const viewEpoch=QUIZ_VIEW_EPOCH;
+  const viewEpoch=await beginQuizViewLoad();
+  if(viewEpoch===null)return;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';document.getElementById('gradeArea').innerHTML='';document.getElementById('submitBtn').disabled=true;
   try{
     const data=await apiRequest('/api/quiz/start',{method:'POST',body:JSON.stringify({course_id:LIVE_COURSE_ID,counts:{single:1,multi:1,short:1}})});
@@ -2088,8 +2092,8 @@ async function startRandomQuiz(){
 async function renderQuiz(){
   const area=document.getElementById('quizArea');
   if(!area)return;
-  await flushDraft();
-  const viewEpoch=QUIZ_VIEW_EPOCH;
+  const viewEpoch=await beginQuizViewLoad();
+  if(viewEpoch===null)return;
   area.innerHTML='<div class="typing"><i></i><i></i><i></i></div>';
   document.getElementById('gradeArea').innerHTML='';
   document.getElementById('submitBtn').disabled=true;

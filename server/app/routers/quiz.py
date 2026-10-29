@@ -205,48 +205,73 @@ async def assign_quiz(
         raise HTTPException(status_code=422, detail={"code": "invalid_due_at", "message": "截止时间必须包含时区"})
     assignment_id = str(uuid4())
     session_ids = []
-    with store.lock:
-        for student in students:
-            session = QuizSession(
-                id=str(uuid4()), user_id=student.id, course_id=payload.course_id,
-                questions=questions, bank_version=_bank_version(store, payload.course_id),
-                title=payload.title, assigned=True, assignment_id=assignment_id,
-            )
-            store.quiz_sessions[session.id] = session
-            store._index_session_locked(session)
-            session_ids.append(session.id)
-        store.assignments[assignment_id] = {
-            "id": assignment_id,
-            "course_id": payload.course_id,
-            "title": payload.title,
-            "created_by": user.id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "due_at": payload.due_at.isoformat() if payload.due_at else None,
-            "class_name": payload.class_name,
-            "question_count": len(questions),
-            "student_ids": [item.id for item in students],
-            "session_ids": session_ids,
-            "idempotency_key": payload.idempotency_key,
-            "idempotency_fingerprint": fingerprint if payload.idempotency_key else None,
-        }
-    audit_entry = store.audit("quiz_assign", user.id, {
-        "course_id": payload.course_id, "title": payload.title,
-        "question_count": len(questions), "student_count": len(students),
-        "session_ids": session_ids,
-    })
-    # 布置与落盘作为一个整体:失败时撤销内存变更,避免“接口报错但学生已能看到作业”。
-    if not await store.save_async():
+    async with store.assignment_lock:
+        if payload.idempotency_key:
+            with store.lock:
+                replay = next(
+                    (
+                        item for item in store.assignments.values()
+                        if item.get("idempotency_key") == payload.idempotency_key
+                        and item.get("created_by") == user.id
+                        and item.get("course_id") == payload.course_id
+                    ),
+                    None,
+                )
+            if replay is not None:
+                if replay.get("idempotency_fingerprint") != fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "idempotency_key_reused", "message": "该幂等键已用于另一次布置，请重新提交"},
+                    )
+                return {
+                    "status": "assigned", "title": replay["title"],
+                    "assignment_id": replay["id"], "question_count": replay["question_count"],
+                    "student_count": len(replay.get("student_ids", [])),
+                    "session_ids": list(replay.get("session_ids", [])),
+                    "idempotent_replay": True,
+                }
         with store.lock:
-            for session_id in session_ids:
-                session = store.quiz_sessions.pop(session_id, None)
-                if session is not None:
-                    store._deindex_session_locked(session)
-            store.assignments.pop(assignment_id, None)
-            _remove_audit_entry(store, audit_entry)
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "persistence_failed", "message": "业务数据暂未可靠保存，请联系管理员"},
-        )
+            for student in students:
+                session = QuizSession(
+                    id=str(uuid4()), user_id=student.id, course_id=payload.course_id,
+                    questions=questions, bank_version=_bank_version(store, payload.course_id),
+                    title=payload.title, assigned=True, assignment_id=assignment_id,
+                )
+                store.quiz_sessions[session.id] = session
+                store._index_session_locked(session)
+                session_ids.append(session.id)
+            store.assignments[assignment_id] = {
+                "id": assignment_id,
+                "course_id": payload.course_id,
+                "title": payload.title,
+                "created_by": user.id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "due_at": payload.due_at.isoformat() if payload.due_at else None,
+                "class_name": payload.class_name,
+                "question_count": len(questions),
+                "student_ids": [item.id for item in students],
+                "session_ids": session_ids,
+                "idempotency_key": payload.idempotency_key,
+                "idempotency_fingerprint": fingerprint if payload.idempotency_key else None,
+            }
+        audit_entry = store.audit("quiz_assign", user.id, {
+            "course_id": payload.course_id, "title": payload.title,
+            "question_count": len(questions), "student_count": len(students),
+            "session_ids": session_ids,
+        })
+        # 布置与落盘作为一个整体:失败时撤销内存变更,避免“接口报错但学生已能看到作业”。
+        if not await store.save_async():
+            with store.lock:
+                for session_id in session_ids:
+                    session = store.quiz_sessions.pop(session_id, None)
+                    if session is not None:
+                        store._deindex_session_locked(session)
+                store.assignments.pop(assignment_id, None)
+                _remove_audit_entry(store, audit_entry)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "persistence_failed", "message": "业务数据暂未可靠保存，请联系管理员"},
+            )
     return {
         "status": "assigned", "title": payload.title,
         "assignment_id": assignment_id,

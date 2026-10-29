@@ -128,6 +128,7 @@ class Store:
         self.registration_attempts: dict[str, list[float]] = {}
         self.lock = RLock()
         self._save_lock = RLock()
+        self.assignment_lock = asyncio.Lock()
         self._dirty = 0  # 自上次成功落盘以来的写入计数;0 表示磁盘与内存一致
         self.courses: dict[str, Course] = {}
         self.enrollments: dict[tuple[str, str], str] = {}
@@ -459,7 +460,7 @@ class Store:
             package.writestr("store.json", self.export_json())
             if root.exists():
                 for path in root.rglob("*"):
-                    if not path.is_file() or path.name == "store.sqlite3" or path.name.startswith("store.sqlite3-") or path.suffix.lower() == ".pkl":
+                    if not path.is_file() or path.name in {"store.sqlite3", "store.json"} or path.name.startswith("store.sqlite3-") or path.suffix.lower() == ".pkl":
                         continue
                     package.write(path, f"files/{path.relative_to(root).as_posix()}")
         return archive.getvalue()

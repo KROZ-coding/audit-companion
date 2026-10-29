@@ -233,6 +233,85 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(session.json()["title"], "第一章测验")
         self.assertEqual(session.json()["questions"][0]["id"], question.id)
 
+    def test_frontend_claims_quiz_view_epoch_before_flushing_draft(self) -> None:
+        """切卷请求必须先占用代次,避免旧点击在 flush 后反而赢得页面。"""
+        frontend = Path(__file__).resolve().parents[2].joinpath("智能学伴演示页.html").read_text(encoding="utf-8")
+        helper_start = frontend.index("async function beginQuizViewLoad()")
+        helper = frontend[helper_start:frontend.index("\n}", helper_start) + 2]
+        script = """
+let QUIZ_VIEW_EPOCH=0;
+let flushDraft;
+%s
+let resolveFirst,resolveSecond;
+let calls=0;
+flushDraft=()=>new Promise(resolve=>{ calls++; if(calls===1)resolveFirst=resolve; else resolveSecond=resolve; });
+const first=beginQuizViewLoad();
+const second=beginQuizViewLoad();
+resolveSecond();
+setImmediate(()=>resolveFirst());
+Promise.all([first,second]).then(([older,newer])=>{
+  if(older!==null||newer!==2)process.exitCode=1;
+});
+""" % helper
+        completed = __import__("subprocess").run(
+            ["node", "-e", script], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        for function_name in ("openAssignedQuiz", "startRandomQuiz", "renderQuiz"):
+            start = frontend.index(f"async function {function_name}(")
+            body = frontend[start:frontend.index("\n}", start) + 2]
+            self.assertIn("await beginQuizViewLoad()", body, function_name)
+            self.assertIn("if(viewEpoch===null)return;", body, function_name)
+
+    def test_assignment_idempotency_is_atomic_under_concurrent_requests(self) -> None:
+        """相同幂等键并发到达时只能创建一份作业和一组学生会话。"""
+        import httpx
+
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/login", json={"username": "teacher01", "password": "teach123*"}
+            ).status_code,
+            200,
+        )
+        question = next(
+            item for item in self.app.state.store.questions.values()
+            if item.status == "published" and item.course_id == "audit-101"
+        )
+        student = self.app.state.store.students_for_course("audit-101")[0]
+        payload = {
+            "course_id": "audit-101",
+            "title": "并发幂等测验",
+            "question_ids": [question.id],
+            "student_ids": [student.id],
+            "idempotency_key": "concurrent-assignment-key",
+        }
+
+        async def submit_twice() -> list[httpx.Response]:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.app), base_url="http://testserver"
+            ) as first, httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.app), base_url="http://testserver"
+            ) as second:
+                await asyncio.gather(
+                    first.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"}),
+                    second.post("/api/auth/login", json={"username": "teacher01", "password": "teach123*"}),
+                )
+                return await asyncio.gather(
+                    first.post("/api/quiz/assign", json=payload),
+                    second.post("/api/quiz/assign", json=payload),
+                )
+
+        responses = asyncio.run(submit_twice())
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        assignment_ids = [response.json()["assignment_id"] for response in responses]
+        self.assertEqual(assignment_ids[0], assignment_ids[1])
+        matching = [
+            item for item in self.app.state.store.assignments.values()
+            if item.get("idempotency_key") == payload["idempotency_key"]
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(len(matching[0]["session_ids"]), 1)
+
     def test_unassigned_submitted_quiz_can_be_resumed(self) -> None:
         self.client.post("/api/auth/login", json={"username": "stu001", "password": "stu123*"})
         started = self.client.post(
@@ -721,6 +800,9 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(archive.status_code, 200)
         self.assertEqual(archive.headers["content-type"], "application/zip")
         self.assertTrue(archive.content.startswith(b"PK"))
+        from zipfile import ZipFile
+        with ZipFile(BytesIO(archive.content)) as package:
+            self.assertNotIn("files/store.json", package.namelist())
         self.assertEqual(self.client.delete(f"/api/docs/{document_id}").status_code, 204)
         self.assertEqual(
             self.client.post(
